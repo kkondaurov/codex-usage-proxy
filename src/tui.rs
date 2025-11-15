@@ -74,7 +74,13 @@ fn run_blocking(
     })();
 
     let restore_result = restore_terminal(terminal);
-    loop_result.and_then(|_| restore_result)
+
+    match (loop_result, restore_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(loop_err), Ok(())) => Err(loop_err),
+        (Ok(()), Err(restore_err)) => Err(restore_err),
+        (Err(loop_err), Err(restore_err)) => Err(loop_err.context(restore_err.to_string())),
+    }
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
