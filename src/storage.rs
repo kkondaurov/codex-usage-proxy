@@ -69,6 +69,7 @@ impl Storage {
                 timestamp TEXT NOT NULL,
                 title TEXT,
                 summary TEXT,
+                conversation_id TEXT,
                 prompt_tokens INTEGER NOT NULL,
                 cached_prompt_tokens INTEGER NOT NULL,
                 completion_tokens INTEGER NOT NULL,
@@ -85,6 +86,9 @@ impl Storage {
             .execute(&*self.pool)
             .await;
         let _ = sqlx::query(r#"ALTER TABLE event_log ADD COLUMN summary TEXT;"#)
+            .execute(&*self.pool)
+            .await;
+        let _ = sqlx::query(r#"ALTER TABLE event_log ADD COLUMN conversation_id TEXT;"#)
             .execute(&*self.pool)
             .await;
 
@@ -143,6 +147,7 @@ impl Storage {
         timestamp: DateTime<Utc>,
         title: Option<&str>,
         summary: Option<&str>,
+        conversation_id: Option<&str>,
         prompt_tokens: u64,
         cached_prompt_tokens: u64,
         completion_tokens: u64,
@@ -152,13 +157,14 @@ impl Storage {
         sqlx::query(
             r#"
             INSERT INTO event_log (
-                timestamp, title, summary, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                timestamp, title, summary, conversation_id, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, cost_usd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             "#,
         )
         .bind(timestamp.to_rfc3339())
         .bind(title)
         .bind(summary)
+        .bind(conversation_id)
         .bind(i64::try_from(prompt_tokens).unwrap_or(i64::MAX))
         .bind(i64::try_from(cached_prompt_tokens).unwrap_or(i64::MAX))
         .bind(i64::try_from(completion_tokens).unwrap_or(i64::MAX))

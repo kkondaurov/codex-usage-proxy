@@ -150,6 +150,8 @@ async fn proxy_handler(
         .client
         .request(req.method().clone(), upstream_url.clone());
 
+    let conversation_header_hint = extract_conversation_id_from_headers(req.headers());
+
     for (name, value) in req.headers().iter() {
         if *name == HOST || is_hop_by_hop_request_header(name) {
             continue;
@@ -162,6 +164,8 @@ async fn proxy_handler(
         .map_err(|err| map_body_error(err))?;
     let model_hint = extract_model_from_request_body(&body_bytes);
     let title_hint = extract_title_from_request_body(&body_bytes);
+    let conversation_hint =
+        conversation_header_hint.or_else(|| extract_conversation_id_from_body(&body_bytes));
 
     if !body_bytes.is_empty() {
         request_builder = request_builder.body(body_bytes);
@@ -188,6 +192,7 @@ async fn proxy_handler(
         let state_clone = state.clone();
         let model_hint_stream = model_hint.clone();
         let title_hint_stream = title_hint.clone();
+        let conversation_hint_stream = conversation_hint.clone();
         tokio::spawn(async move {
             let capture = usage_rx.await.unwrap_or(UsageCapture {
                 usage: None,
@@ -197,7 +202,8 @@ async fn proxy_handler(
                 &state_clone,
                 model_hint_stream,
                 title_hint_stream,
-                capture.summary,
+                capture.summary.clone(),
+                conversation_hint_stream,
                 capture.usage,
             );
         });
@@ -226,13 +232,21 @@ async fn proxy_handler(
         if let Some(capture) = response_capture {
             emit_usage_event(
                 &state,
-                model_hint,
-                title_hint,
-                capture.summary,
+                model_hint.clone(),
+                title_hint.clone(),
+                capture.summary.clone(),
+                conversation_hint.clone(),
                 capture.usage,
             );
         } else {
-            emit_usage_event(&state, model_hint, title_hint, None, None);
+            emit_usage_event(
+                &state,
+                model_hint,
+                title_hint,
+                None,
+                conversation_hint,
+                None,
+            );
         }
     }
 
@@ -365,6 +379,7 @@ fn emit_usage_event(
     model_hint: Option<String>,
     title_hint: Option<String>,
     summary_hint: Option<String>,
+    conversation_hint: Option<String>,
     usage: Option<UsageMetrics>,
 ) {
     let (model_name, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens) =
@@ -402,6 +417,7 @@ fn emit_usage_event(
         model: model_name,
         title: title_hint,
         summary: summary_hint,
+        conversation_id: conversation_hint,
         prompt_tokens,
         cached_prompt_tokens,
         completion_tokens,
@@ -432,6 +448,31 @@ fn extract_title_from_request_body(body: &Bytes) -> Option<String> {
     let value: Value = serde_json::from_slice(body).ok()?;
     let raw = extract_title_from_value(&value)?;
     format_snippet(&raw, TITLE_MAX_CHARS)
+}
+
+fn extract_conversation_id_from_headers(headers: &HeaderMap) -> Option<String> {
+    for key in ["conversation_id", "session_id"] {
+        if let Some(value) = headers.get(key) {
+            if let Ok(text) = value.to_str() {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_conversation_id_from_body(body: &Bytes) -> Option<String> {
+    if body.is_empty() {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(body).ok()?;
+    value
+        .get("prompt_cache_key")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 fn extract_title_from_value(value: &Value) -> Option<String> {
