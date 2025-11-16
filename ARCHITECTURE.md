@@ -27,7 +27,7 @@ Both subsystems communicate through asynchronous channels and share a lightweigh
 - **Configuration Layer (`src/config/`)**
   - Loads `codex-usage.toml` from the working directory (override via `--config`).
   - Fields: listen address, upstream base URL, SQLite path, default pricing, per-model overrides.
-  - Environment variables (`OPENAI_BASE_URL`, `OPENAI_API_KEY`, etc.) can override matching fields.
+  - Environment variables (`CODEX_USAGE_UPSTREAM_BASE_URL`, `CODEX_USAGE_LISTEN_ADDR`, `OPENAI_API_KEY`, etc.) can override matching fields.
 
 - **Terminal UI (`src/tui/`)**
   - Implemented with `ratatui` + `crossterm`.
@@ -54,4 +54,3 @@ Both subsystems communicate through asynchronous channels and share a lightweigh
 - The proxy never stores API keys; it forwards `Authorization` headers verbatim.
 - Request/response bodies are not persisted; only metadata (model, token counts, costs) is stored.
 - Debug logging is opt-in via `RUST_LOG`; production defaults are quiet.
-

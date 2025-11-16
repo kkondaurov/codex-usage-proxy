@@ -51,9 +51,11 @@ Environment overrides:
 
 | Env var | Overrides |
 | --- | --- |
-| `OPENAI_BASE_URL` | `[server].upstream_base_url` |
+| `CODEX_USAGE_UPSTREAM_BASE_URL` | `[server].upstream_base_url` |
 | `CODEX_USAGE_LISTEN_ADDR` | `[server].listen_addr` |
 | `CODEX_USAGE_DB_PATH` | `[storage].database_path` |
+
+`CODEX_USAGE_UPSTREAM_BASE_URL` intentionally differs from Codex CLI’s own `OPENAI_BASE_URL`. Set the former to the real upstream (usually `https://api.openai.com/v1`) so you can still point Codex at the proxy via `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` without confusing the proxy about its upstream target.
 
 ## Default Pricing Table (USD per 1K tokens)
 

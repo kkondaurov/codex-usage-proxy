@@ -60,7 +60,7 @@ impl AppConfig {
         if let Ok(addr) = env::var("CODEX_USAGE_LISTEN_ADDR") {
             self.server.listen_addr = addr;
         }
-        if let Ok(base_url) = env::var("OPENAI_BASE_URL") {
+        if let Ok(base_url) = env::var("CODEX_USAGE_UPSTREAM_BASE_URL") {
             self.server.upstream_base_url = base_url;
         }
         if let Ok(db_path) = env::var("CODEX_USAGE_DB_PATH") {
@@ -356,7 +356,7 @@ mod tests {
         let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let _listen_guard = EnvGuard::unset("CODEX_USAGE_LISTEN_ADDR");
         let _db_guard = EnvGuard::unset("CODEX_USAGE_DB_PATH");
-        let _base_guard = EnvGuard::unset("OPENAI_BASE_URL");
+        let _base_guard = EnvGuard::unset("CODEX_USAGE_UPSTREAM_BASE_URL");
 
         let file = NamedTempFile::new().unwrap();
         let toml = r#"
@@ -390,7 +390,8 @@ mod tests {
         let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let _listen_guard = EnvGuard::set("CODEX_USAGE_LISTEN_ADDR", "127.0.0.1:7000");
         let _db_guard = EnvGuard::set("CODEX_USAGE_DB_PATH", "/tmp/codex-test.db");
-        let _base_guard = EnvGuard::set("OPENAI_BASE_URL", "https://proxy.example.com/v3");
+        let _base_guard =
+            EnvGuard::set("CODEX_USAGE_UPSTREAM_BASE_URL", "https://proxy.example.com/v3");
 
         let file = NamedTempFile::new().unwrap();
         fs::write(

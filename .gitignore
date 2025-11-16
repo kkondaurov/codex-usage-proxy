@@ -7,6 +7,9 @@
 /usage.db-wal
 /usage.db-shm
 
+# local config
+codex-usage.toml
+
 # Misc editor / OS files
 .DS_Store
 .env

@@ -2,6 +2,7 @@
 listen_addr = "127.0.0.1:8787"
 public_base_path = "/v1"
 upstream_base_url = "https://api.openai.com/v1"
+# Override upstream_base_url with CODEX_USAGE_UPSTREAM_BASE_URL to keep Codex CLI free to set OPENAI_BASE_URL when targeting the proxy.
 
 [storage]
 database_path = "usage.db"
@@ -13,8 +14,8 @@ refresh_hz = 10
 
 [pricing]
 currency = "USD"
-default_prompt_per_1k = 0.010
-default_completion_per_1k = 0.030
+default_prompt_per_1k = 0.00125
+default_completion_per_1k = 0.0100
 
 [pricing.models."gpt-4.1"]
 prompt_per_1k = 0.0020
@@ -46,7 +47,17 @@ prompt_per_1k = 0.0040
 cached_prompt_per_1k = 0.0010
 completion_per_1k = 0.0160
 
-[pricing.models."gpt-5.1"]
+[pricing.models."gpt-5"]
+prompt_per_1k = 0.00125
+cached_prompt_per_1k = 0.000125
+completion_per_1k = 0.0100
+
+[pricing.models."gpt-5-codex"]
+prompt_per_1k = 0.00125
+cached_prompt_per_1k = 0.000125
+completion_per_1k = 0.0100
+
+[pricing.models."gpt-5.1-2025-11-13"]
 prompt_per_1k = 0.00125
 cached_prompt_per_1k = 0.000125
 completion_per_1k = 0.0100
