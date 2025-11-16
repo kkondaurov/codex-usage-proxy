@@ -382,6 +382,7 @@ fn emit_usage_event(
     conversation_hint: Option<String>,
     usage: Option<UsageMetrics>,
 ) {
+    let usage_included = usage.is_some();
     let (model_name, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens) =
         if let Some(usage) = usage {
             let model = usage
@@ -423,6 +424,7 @@ fn emit_usage_event(
         completion_tokens,
         total_tokens,
         cost_usd: cost,
+        usage_included,
     };
 
     if let Err(err) = state.usage_tx.try_send(event) {
@@ -743,6 +745,7 @@ fn usage_from_value(value: &Value) -> Option<UsageMetrics> {
     })
 }
 
+#[cfg(test)]
 fn parse_usage_from_sse_data(payload: &str) -> Option<UsageMetrics> {
     let value: Value = serde_json::from_str(payload).ok()?;
     let event_type = value.get("type").and_then(|v| v.as_str())?;
@@ -1046,6 +1049,7 @@ mod tests {
         assert_eq!(event.total_tokens, 130);
         assert_eq!(event.summary.as_deref(), Some("answer"));
         assert_eq!(event.conversation_id.as_deref(), Some("conv-1"));
+        assert!(event.usage_included);
     }
 
     fn test_proxy_state(tx: mpsc::Sender<UsageEvent>) -> ProxyState {

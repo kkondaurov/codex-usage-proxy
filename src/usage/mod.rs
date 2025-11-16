@@ -19,6 +19,7 @@ pub struct UsageEvent {
     pub completion_tokens: u64,
     pub total_tokens: u64,
     pub cost_usd: f64,
+    pub usage_included: bool,
 }
 
 pub type UsageEventSender = mpsc::Sender<UsageEvent>;
@@ -102,19 +103,22 @@ impl UsageAggregator {
                 event.completion_tokens,
                 event.total_tokens,
                 event.cost_usd,
+                event.usage_included,
             )
             .await?;
-        self.storage
-            .record_daily_stat(
-                date,
-                &event.model,
-                event.prompt_tokens,
-                event.cached_prompt_tokens,
-                event.completion_tokens,
-                event.total_tokens,
-                event.cost_usd,
-            )
-            .await?;
+        if event.usage_included {
+            self.storage
+                .record_daily_stat(
+                    date,
+                    &event.model,
+                    event.prompt_tokens,
+                    event.cached_prompt_tokens,
+                    event.completion_tokens,
+                    event.total_tokens,
+                    event.cost_usd,
+                )
+                .await?;
+        }
 
         self.recent_events.push(event);
         Ok(())
@@ -173,6 +177,7 @@ mod tests {
             completion_tokens: id as u64,
             total_tokens: (id * 2) as u64,
             cost_usd: id as f64 * 0.01,
+            usage_included: true,
         }
     }
 
@@ -222,6 +227,7 @@ mod tests {
             completion_tokens: 80,
             total_tokens: 200,
             cost_usd: 0.5,
+            usage_included: true,
         };
 
         tx.send(event.clone()).await.unwrap();

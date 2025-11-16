@@ -74,7 +74,8 @@ impl Storage {
                 cached_prompt_tokens INTEGER NOT NULL,
                 completion_tokens INTEGER NOT NULL,
                 total_tokens INTEGER NOT NULL,
-                cost_usd REAL NOT NULL
+                cost_usd REAL NOT NULL,
+                usage_included INTEGER NOT NULL DEFAULT 1
             );
             "#,
         )
@@ -91,6 +92,11 @@ impl Storage {
         let _ = sqlx::query(r#"ALTER TABLE event_log ADD COLUMN conversation_id TEXT;"#)
             .execute(&*self.pool)
             .await;
+        let _ = sqlx::query(
+            r#"ALTER TABLE event_log ADD COLUMN usage_included INTEGER NOT NULL DEFAULT 1;"#,
+        )
+        .execute(&*self.pool)
+        .await;
 
         sqlx::query(
             r#"
@@ -153,12 +159,13 @@ impl Storage {
         completion_tokens: u64,
         total_tokens: u64,
         cost_usd: f64,
+        usage_included: bool,
     ) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO event_log (
-                timestamp, title, summary, conversation_id, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                timestamp, title, summary, conversation_id, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, cost_usd, usage_included
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             "#,
         )
         .bind(timestamp.to_rfc3339())
@@ -170,6 +177,7 @@ impl Storage {
         .bind(i64::try_from(completion_tokens).unwrap_or(i64::MAX))
         .bind(i64::try_from(total_tokens).unwrap_or(i64::MAX))
         .bind(cost_usd)
+        .bind(usage_included)
         .execute(&*self.pool)
         .await
         .with_context(|| "failed to insert event log row")?;

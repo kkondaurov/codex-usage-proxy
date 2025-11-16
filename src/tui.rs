@@ -182,16 +182,26 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
             .iter()
             .take(config.display.recent_events_capacity)
             .map(|event| {
-                Row::new(vec![
+                let row = Row::new(vec![
                     event.timestamp.format("%H:%M:%S").to_string(),
                     event.title.clone().unwrap_or_else(|| "—".to_string()),
                     event.summary.clone().unwrap_or_else(|| "—".to_string()),
                     event.model.clone(),
-                    format_tokens(event.prompt_tokens),
-                    format_tokens(event.cached_prompt_tokens),
-                    format_tokens(event.completion_tokens),
-                    format_cost(event.cost_usd),
-                ])
+                    format_usage_tokens(event, event.prompt_tokens),
+                    format_usage_tokens(event, event.cached_prompt_tokens),
+                    format_usage_tokens(event, event.completion_tokens),
+                    format_usage_cost(event),
+                ]);
+
+                if event.usage_included {
+                    row
+                } else {
+                    row.style(
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    )
+                }
             })
             .collect()
     };
@@ -231,6 +241,22 @@ fn format_tokens(value: u64) -> String {
 
 fn format_cost(cost: f64) -> String {
     format!("${:.4}", cost)
+}
+
+fn format_usage_tokens(event: &UsageEvent, value: u64) -> String {
+    if event.usage_included {
+        format_tokens(value)
+    } else {
+        "n/a".to_string()
+    }
+}
+
+fn format_usage_cost(event: &UsageEvent) -> String {
+    if event.usage_included {
+        format_cost(event.cost_usd)
+    } else {
+        "n/a".to_string()
+    }
 }
 
 struct SummaryStats {
