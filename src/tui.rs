@@ -30,6 +30,11 @@ use tokio::runtime::Handle;
 
 const DETAIL_SNIPPET_LIMIT: usize = 120;
 const TURN_VIEW_LIMIT: usize = 40;
+const STATS_HOURLY_COUNT: usize = 24;
+const STATS_DAILY_COUNT: usize = 14;
+const STATS_WEEKLY_COUNT: usize = 8;
+const STATS_MONTHLY_COUNT: usize = 12;
+const STATS_YEARLY_COUNT: usize = 5;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum ViewMode {
@@ -72,6 +77,7 @@ fn run_blocking(
 ) -> Result<()> {
     let mut terminal = setup_terminal()?;
     let mut conversation_view = ConversationViewState::new();
+    let mut stats_view = StatsViewState::new();
     let mut view_mode = ViewMode::Overview;
 
     let loop_result: Result<()> = (|| -> Result<()> {
@@ -112,11 +118,11 @@ fn run_blocking(
                     Vec::new()
                 };
             let stats_breakdown = if matches!(view_mode, ViewMode::Stats) {
-                Some(
-                    runtime
-                        .block_on(StatsBreakdown::gather(&storage, Utc::now(), &stats))
-                        .context("failed to gather extended stats")?,
-                )
+                let breakdown = runtime
+                    .block_on(StatsBreakdown::gather(&storage, Utc::now()))
+                    .context("failed to gather extended stats")?;
+                stats_view.sync(&breakdown);
+                Some(breakdown)
             } else {
                 None
             };
@@ -129,6 +135,7 @@ fn run_blocking(
                     &recent,
                     &conversation_stats,
                     &conversation_view,
+                    &stats_view,
                     selected_conversation.as_ref(),
                     &conversation_turns,
                     stats_breakdown.as_ref(),
@@ -161,16 +168,20 @@ fn run_blocking(
                         KeyCode::Esc => {
                             view_mode = ViewMode::Overview;
                         }
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            if matches!(view_mode, ViewMode::Conversations) {
-                                conversation_view.prev_period(conversation_stats.periods_len());
+                        KeyCode::Left | KeyCode::Char('h') => match view_mode {
+                            ViewMode::Conversations => {
+                                conversation_view.prev_period(conversation_stats.periods_len())
                             }
-                        }
-                        KeyCode::Right | KeyCode::Char('l') => {
-                            if matches!(view_mode, ViewMode::Conversations) {
-                                conversation_view.next_period(conversation_stats.periods_len());
+                            ViewMode::Stats => stats_view.prev_period(),
+                            _ => {}
+                        },
+                        KeyCode::Right | KeyCode::Char('l') => match view_mode {
+                            ViewMode::Conversations => {
+                                conversation_view.next_period(conversation_stats.periods_len())
                             }
-                        }
+                            ViewMode::Stats => stats_view.next_period(),
+                            _ => {}
+                        },
                         KeyCode::Up | KeyCode::Char('k') => {
                             if matches!(view_mode, ViewMode::Conversations) {
                                 let rows = conversation_stats
@@ -226,6 +237,7 @@ fn draw_ui(
     recent: &[UsageEvent],
     conversations: &ConversationStats,
     conversation_view: &ConversationViewState,
+    stats_view: &StatsViewState,
     selected: Option<&ConversationAggregate>,
     turns: &[ConversationTurn],
     stats_breakdown: Option<&StatsBreakdown>,
@@ -247,7 +259,7 @@ fn draw_ui(
             selected,
             turns,
         ),
-        ViewMode::Stats => draw_stats_view(frame, layout[1], stats_breakdown),
+        ViewMode::Stats => draw_stats_view(frame, layout[1], stats_breakdown, stats_view),
     }
 }
 
@@ -284,9 +296,14 @@ fn draw_conversation_view(
     render_conversation_panel(frame, layout[1], selected, turns);
 }
 
-fn draw_stats_view(frame: &mut Frame, area: Rect, stats: Option<&StatsBreakdown>) {
-    match stats {
-        Some(data) => {
+fn draw_stats_view(
+    frame: &mut Frame,
+    area: Rect,
+    stats: Option<&StatsBreakdown>,
+    view: &StatsViewState,
+) {
+    match stats.and_then(|data| data.period(view.active_period)) {
+        Some(period) => {
             let widths = [
                 Constraint::Length(18),
                 Constraint::Length(14),
@@ -297,7 +314,7 @@ fn draw_stats_view(frame: &mut Frame, area: Rect, stats: Option<&StatsBreakdown>
                 Constraint::Length(12),
                 Constraint::Length(12),
             ];
-            let rows: Vec<Row> = data
+            let rows: Vec<Row> = period
                 .rows
                 .iter()
                 .map(|row| {
@@ -325,7 +342,10 @@ fn draw_stats_view(frame: &mut Frame, area: Rect, stats: Option<&StatsBreakdown>
                     "Blended",
                     "API",
                 ]))
-                .block(gray_block("Detailed Usage Statistics"))
+                .block(gray_block(format!(
+                    "Detailed Usage – {} (←/→ switch period)",
+                    period.label
+                )))
                 .column_spacing(1);
 
             frame.render_widget(table, area);
@@ -727,42 +747,29 @@ struct SummaryStats {
     last_10m: AggregateTotals,
     last_hour: AggregateTotals,
     today: AggregateTotals,
-    week: AggregateTotals,
-    month: AggregateTotals,
 }
 
 impl SummaryStats {
     async fn gather(storage: &Storage, today: NaiveDate) -> Result<Self> {
-        let week_start = today
-            .checked_sub_signed(ChronoDuration::days(6))
-            .unwrap_or(today);
-        let month_start = NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap_or(today);
-
         let now = Utc::now();
         let last_10m = storage
             .totals_since(now - ChronoDuration::minutes(10))
             .await?;
         let last_hour = storage.totals_since(now - ChronoDuration::hours(1)).await?;
         let today_totals = storage.totals_between(today, today).await?;
-        let week_totals = storage.totals_between(week_start, today).await?;
-        let month_totals = storage.totals_between(month_start, today).await?;
 
         Ok(Self {
             last_10m,
             last_hour,
             today: today_totals,
-            week: week_totals,
-            month: month_totals,
         })
     }
 }
 
 impl StatsBreakdown {
-    async fn gather(storage: &Storage, now: DateTime<Utc>, summary: &SummaryStats) -> Result<Self> {
+    async fn gather(storage: &Storage, now: DateTime<Utc>) -> Result<Self> {
         let today = now.date_naive();
-        let mut rows = Vec::new();
-        rows.push(StatRow::new("Last 10 min", summary.last_10m.clone()));
-        rows.push(StatRow::new("Last 1 hr", summary.last_hour.clone()));
+        let mut periods = Vec::new();
 
         let hourly_data = storage.hourly_usage_for_day(today).await?;
         let mut hourly_map = HashMap::new();
@@ -771,70 +778,86 @@ impl StatsBreakdown {
         }
         let mut hour = now.hour() as i32;
         let mut shown = 0;
-        while hour >= 0 && shown < 12 {
+        let mut hourly_rows = Vec::new();
+        while hour >= 0 && shown < STATS_HOURLY_COUNT {
             let totals = hourly_map.get(&(hour as u32)).cloned().unwrap_or_default();
-            rows.push(StatRow::new(format!("Today {:02}:00", hour), totals));
+            hourly_rows.push(StatRow::new(format!("Today {:02}:00", hour), totals));
             hour -= 1;
             shown += 1;
         }
+        periods.push(StatsPeriodData {
+            label: "Hourly".to_string(),
+            rows: hourly_rows,
+        });
 
-        rows.push(StatRow::new("Today", summary.today.clone()));
-
-        for offset in 1..=7 {
-            let day = today
-                .checked_sub_signed(ChronoDuration::days(offset as i64))
-                .unwrap_or(today);
+        let mut day = today;
+        let mut daily_rows = Vec::new();
+        for _ in 0..STATS_DAILY_COUNT {
             let totals = storage.totals_between(day, day).await?;
-            rows.push(StatRow::new(day.to_string(), totals));
+            daily_rows.push(StatRow::new(day.to_string(), totals));
+            day = day
+                .checked_sub_signed(ChronoDuration::days(1))
+                .unwrap_or(day);
         }
+        periods.push(StatsPeriodData {
+            label: "Daily".to_string(),
+            rows: daily_rows,
+        });
 
-        let this_week_start = start_of_week(today);
-        rows.push(StatRow::new("This Week", summary.week.clone()));
-
-        let last_week_start = this_week_start
-            .checked_sub_signed(ChronoDuration::days(7))
-            .unwrap_or(this_week_start);
-        let last_week_end = this_week_start
-            .checked_sub_signed(ChronoDuration::days(1))
-            .unwrap_or(this_week_start);
-        let last_week = storage
-            .totals_between(last_week_start, last_week_end)
-            .await?;
-        rows.push(StatRow::new("Last Week", last_week));
-
-        rows.push(StatRow::new("This Month", summary.month.clone()));
+        let mut week_start = start_of_week(today);
+        let mut weekly_rows = Vec::new();
+        for _ in 0..STATS_WEEKLY_COUNT {
+            let week_end = week_start
+                .checked_add_signed(ChronoDuration::days(6))
+                .unwrap_or(week_start);
+            let totals = storage.totals_between(week_start, week_end).await?;
+            weekly_rows.push(StatRow::new(format!("Week of {}", week_start), totals));
+            week_start = week_start
+                .checked_sub_signed(ChronoDuration::days(7))
+                .unwrap_or(week_start);
+        }
+        periods.push(StatsPeriodData {
+            label: "Weekly".to_string(),
+            rows: weekly_rows,
+        });
 
         let mut month_cursor = first_day_of_month(today);
-        for _ in 0..6 {
-            month_cursor = month_cursor
-                .checked_sub_months(chrono::Months::new(1))
-                .unwrap_or(month_cursor);
+        let mut monthly_rows = Vec::new();
+        for _ in 0..STATS_MONTHLY_COUNT {
             let month_end = end_of_month(month_cursor);
             let totals = storage.totals_between(month_cursor, month_end).await?;
-            rows.push(StatRow::new(
-                format!("{}", month_cursor.format("%Y-%m")),
+            monthly_rows.push(StatRow::new(
+                month_cursor.format("%Y-%m").to_string(),
                 totals,
             ));
+            month_cursor = month_cursor
+                .checked_sub_months(Months::new(1))
+                .unwrap_or(month_cursor);
         }
+        periods.push(StatsPeriodData {
+            label: "Monthly".to_string(),
+            rows: monthly_rows,
+        });
 
-        let year_start = NaiveDate::from_ymd_opt(today.year(), 1, 1).unwrap();
-        let this_year = storage.totals_between(year_start, today).await?;
-        rows.push(StatRow::new(
-            format!("This Year ({})", today.year()),
-            this_year,
-        ));
+        let mut year = today.year();
+        let mut yearly_rows = Vec::new();
+        for _ in 0..STATS_YEARLY_COUNT {
+            let start = NaiveDate::from_ymd_opt(year, 1, 1).unwrap();
+            let end = NaiveDate::from_ymd_opt(year, 12, 31).unwrap();
+            let totals = storage.totals_between(start, end).await?;
+            yearly_rows.push(StatRow::new(format!("{}", year), totals));
+            year -= 1;
+        }
+        periods.push(StatsPeriodData {
+            label: "Yearly".to_string(),
+            rows: yearly_rows,
+        });
 
-        let last_year_start = NaiveDate::from_ymd_opt(today.year() - 1, 1, 1).unwrap();
-        let last_year_end = NaiveDate::from_ymd_opt(today.year() - 1, 12, 31).unwrap();
-        let last_year = storage
-            .totals_between(last_year_start, last_year_end)
-            .await?;
-        rows.push(StatRow::new(
-            format!("Last Year ({})", today.year() - 1),
-            last_year,
-        ));
+        Ok(Self { periods })
+    }
 
-        Ok(Self { rows })
+    fn period(&self, idx: usize) -> Option<&StatsPeriodData> {
+        self.periods.get(idx)
     }
 }
 
@@ -864,6 +887,11 @@ fn end_of_month(start: NaiveDate) -> NaiveDate {
 }
 
 struct StatsBreakdown {
+    periods: Vec<StatsPeriodData>,
+}
+
+struct StatsPeriodData {
+    label: String,
     rows: Vec<StatRow>,
 }
 
@@ -1014,6 +1042,47 @@ impl ConversationViewState {
         stats
             .period(self.active_period)
             .and_then(|period| period.aggregates.get(self.selected_row))
+    }
+}
+
+struct StatsViewState {
+    active_period: usize,
+    periods_len: usize,
+}
+
+impl StatsViewState {
+    fn new() -> Self {
+        Self {
+            active_period: 0,
+            periods_len: 0,
+        }
+    }
+
+    fn sync(&mut self, stats: &StatsBreakdown) {
+        self.periods_len = stats.periods.len();
+        if self.periods_len == 0 {
+            self.active_period = 0;
+        } else if self.active_period >= self.periods_len {
+            self.active_period = self.periods_len.saturating_sub(1);
+        }
+    }
+
+    fn prev_period(&mut self) {
+        if self.periods_len == 0 {
+            return;
+        }
+        if self.active_period == 0 {
+            self.active_period = self.periods_len - 1;
+        } else {
+            self.active_period -= 1;
+        }
+    }
+
+    fn next_period(&mut self) {
+        if self.periods_len == 0 {
+            return;
+        }
+        self.active_period = (self.active_period + 1) % self.periods_len;
     }
 }
 
