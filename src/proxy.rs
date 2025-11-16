@@ -388,28 +388,36 @@ fn emit_usage_event(
     usage: Option<UsageMetrics>,
 ) {
     let usage_included = usage.is_some();
-    let (model_name, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens) =
-        if let Some(usage) = usage {
-            let model = usage
-                .model
-                .or_else(|| model_hint.clone())
-                .unwrap_or_else(|| "unknown".to_string());
-            (
-                model,
-                usage.prompt_tokens,
-                usage.cached_prompt_tokens,
-                usage.completion_tokens,
-                usage.total_tokens,
-            )
-        } else {
-            (
-                model_hint.unwrap_or_else(|| "unknown".to_string()),
-                0,
-                0,
-                0,
-                0,
-            )
-        };
+    let (
+        model_name,
+        prompt_tokens,
+        cached_prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        reasoning_tokens,
+    ) = if let Some(usage) = usage {
+        let model = usage
+            .model
+            .or_else(|| model_hint.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        (
+            model,
+            usage.prompt_tokens,
+            usage.cached_prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+            usage.reasoning_tokens,
+        )
+    } else {
+        (
+            model_hint.unwrap_or_else(|| "unknown".to_string()),
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
+    };
 
     let cost = state.config.pricing.cost_for_with_cached(
         &model_name,
@@ -428,6 +436,7 @@ fn emit_usage_event(
         cached_prompt_tokens,
         completion_tokens,
         total_tokens,
+        reasoning_tokens,
         cost_usd: cost,
         usage_included,
     };
@@ -690,6 +699,7 @@ struct UsageMetrics {
     cached_prompt_tokens: u64,
     completion_tokens: u64,
     total_tokens: u64,
+    reasoning_tokens: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -720,6 +730,7 @@ fn usage_from_value(value: &Value) -> Option<UsageMetrics> {
     } else {
         total_tokens
     };
+    let reasoning_tokens = reasoning_tokens_from_usage(usage).min(completion_tokens);
     let model = value
         .get("model")
         .and_then(|m| m.as_str())
@@ -730,6 +741,7 @@ fn usage_from_value(value: &Value) -> Option<UsageMetrics> {
         cached_prompt_tokens,
         completion_tokens,
         total_tokens,
+        reasoning_tokens,
     })
 }
 
@@ -785,6 +797,15 @@ fn cached_tokens_from_usage(usage: &Value) -> u64 {
 
     extract(usage.get("prompt_tokens_details"))
         .or_else(|| extract(usage.get("input_tokens_details")))
+        .unwrap_or(0)
+}
+
+fn reasoning_tokens_from_usage(usage: &Value) -> u64 {
+    usage
+        .get("output_tokens_details")
+        .and_then(|v| v.get("reasoning_tokens"))
+        .and_then(|v| v.as_u64())
+        .or_else(|| usage.get("reasoning_tokens").and_then(|v| v.as_u64()))
         .unwrap_or(0)
 }
 
@@ -968,7 +989,7 @@ mod tests {
     #[test]
     fn sse_usage_parser_extracts_usage() {
         let mut parser = SseUsageParser::new();
-        let chunk = b"data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-4.1-mini\",\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}}\n\n";
+        let chunk = b"data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-4.1-mini\",\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16,\"output_tokens_details\":{\"reasoning_tokens\":2}}}}\n\n";
         parser.feed(chunk);
         let capture = parser.take_capture();
         let usage = capture.usage.expect("usage parsed");
@@ -976,6 +997,7 @@ mod tests {
         assert_eq!(usage.cached_prompt_tokens, 0);
         assert_eq!(usage.completion_tokens, 4);
         assert_eq!(usage.total_tokens, 16);
+        assert_eq!(usage.reasoning_tokens, 2);
         assert_eq!(usage.model.as_deref(), Some("gpt-4.1-mini"));
     }
 
@@ -989,6 +1011,7 @@ mod tests {
                     "input_tokens":8558,
                     "input_tokens_details":{"cached_tokens":8448},
                     "output_tokens":52,
+                    "output_tokens_details":{"reasoning_tokens":7},
                     "total_tokens":8610
                 }
             }
@@ -998,6 +1021,7 @@ mod tests {
         assert_eq!(usage.cached_prompt_tokens, 8448);
         assert_eq!(usage.completion_tokens, 52);
         assert_eq!(usage.total_tokens, 8610);
+        assert_eq!(usage.reasoning_tokens, 7);
     }
 
     #[test]
@@ -1017,6 +1041,7 @@ mod tests {
         let event = rx.try_recv().expect("usage event not emitted");
         assert_eq!(event.model, "gpt-4.1");
         assert_eq!(event.prompt_tokens, 0);
+        assert_eq!(event.reasoning_tokens, 0);
         assert!(!event.usage_included);
     }
 
@@ -1030,6 +1055,7 @@ mod tests {
             cached_prompt_tokens: 60,
             completion_tokens: 30,
             total_tokens: 130,
+            reasoning_tokens: 5,
         };
 
         emit_usage_event(
@@ -1043,6 +1069,7 @@ mod tests {
 
         let event = rx.try_recv().expect("usage event not emitted");
         assert_eq!(event.prompt_tokens, 100);
+        assert_eq!(event.reasoning_tokens, 5);
         assert!(event.usage_included);
     }
 

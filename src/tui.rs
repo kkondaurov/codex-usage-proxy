@@ -126,6 +126,7 @@ fn render_summary(frame: &mut Frame, area: Rect, stats: &SummaryStats) {
         Constraint::Length(12),
         Constraint::Length(12),
         Constraint::Length(12),
+        Constraint::Length(12),
         Constraint::Length(16),
     ];
     let table = Table::new(rows, widths)
@@ -135,6 +136,7 @@ fn render_summary(frame: &mut Frame, area: Rect, stats: &SummaryStats) {
                 "Input",
                 "Cached",
                 "Output",
+                "Reasoning",
                 "Total",
                 "Cost (USD)",
             ])
@@ -151,6 +153,7 @@ fn build_summary_row<'a>(label: &'a str, totals: &AggregateTotals, style: Style)
         Cell::from(format_tokens(totals.prompt_tokens)),
         Cell::from(format_tokens(totals.cached_prompt_tokens)),
         Cell::from(format_tokens(totals.completion_tokens)),
+        Cell::from(format_tokens(totals.reasoning_tokens)),
         Cell::from(format_tokens(totals.total_tokens)),
         Cell::from(format_cost(totals.cost_usd)),
     ])
@@ -158,7 +161,15 @@ fn build_summary_row<'a>(label: &'a str, totals: &AggregateTotals, style: Style)
 
 fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recent: &[UsageEvent]) {
     let header = Row::new(vec![
-        "Time", "Title", "Result", "Model", "Input", "Cached", "Output", "Cost",
+        "Time",
+        "Title",
+        "Result",
+        "Model",
+        "Input",
+        "Cached",
+        "Output",
+        "Reasoning",
+        "Cost",
     ])
     .style(
         Style::default()
@@ -171,6 +182,7 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
             "–",
             "No recent requests",
             "No recent responses",
+            "–",
             "–",
             "–",
             "–",
@@ -190,6 +202,7 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
                     format_usage_tokens(event, event.prompt_tokens),
                     format_usage_tokens(event, event.cached_prompt_tokens),
                     format_usage_tokens(event, event.completion_tokens),
+                    format_usage_tokens(event, event.reasoning_tokens),
                     format_usage_cost(event),
                 ]);
 
@@ -211,9 +224,10 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
         Constraint::Length(24),
         Constraint::Length(28),
         Constraint::Length(16),
-        Constraint::Length(12),
-        Constraint::Length(12),
-        Constraint::Length(12),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(10),
         Constraint::Length(12),
     ];
 

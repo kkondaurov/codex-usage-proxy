@@ -18,6 +18,7 @@ pub struct UsageEvent {
     pub cached_prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+    pub reasoning_tokens: u64,
     pub cost_usd: f64,
     pub usage_included: bool,
 }
@@ -102,6 +103,7 @@ impl UsageAggregator {
                 event.cached_prompt_tokens,
                 event.completion_tokens,
                 event.total_tokens,
+                event.reasoning_tokens,
                 event.cost_usd,
                 event.usage_included,
             )
@@ -115,6 +117,7 @@ impl UsageAggregator {
                     event.cached_prompt_tokens,
                     event.completion_tokens,
                     event.total_tokens,
+                    event.reasoning_tokens,
                     event.cost_usd,
                 )
                 .await?;
@@ -176,6 +179,7 @@ mod tests {
             cached_prompt_tokens: (id / 2).max(0) as u64,
             completion_tokens: id as u64,
             total_tokens: (id * 2) as u64,
+            reasoning_tokens: (id / 3).max(0) as u64,
             cost_usd: id as f64 * 0.01,
             usage_included: true,
         }
@@ -226,6 +230,7 @@ mod tests {
             cached_prompt_tokens: 100,
             completion_tokens: 80,
             total_tokens: 200,
+            reasoning_tokens: 20,
             cost_usd: 0.5,
             usage_included: true,
         };
@@ -240,6 +245,7 @@ mod tests {
         assert_eq!(totals.cached_prompt_tokens, event.cached_prompt_tokens);
         assert_eq!(totals.completion_tokens, event.completion_tokens);
         assert_eq!(totals.total_tokens, event.total_tokens);
+        assert_eq!(totals.reasoning_tokens, event.reasoning_tokens);
         assert!((totals.cost_usd - event.cost_usd).abs() < f64::EPSILON);
 
         let recent_totals = storage
@@ -247,5 +253,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(recent_totals.prompt_tokens, event.prompt_tokens);
+        assert_eq!(recent_totals.reasoning_tokens, event.reasoning_tokens);
     }
 }

@@ -47,6 +47,7 @@ impl Storage {
                 cached_prompt_tokens INTEGER NOT NULL DEFAULT 0,
                 completion_tokens INTEGER NOT NULL DEFAULT 0,
                 total_tokens INTEGER NOT NULL DEFAULT 0,
+                reasoning_tokens INTEGER NOT NULL DEFAULT 0,
                 cost_usd REAL NOT NULL DEFAULT 0.0,
                 PRIMARY KEY (date, model)
             );
@@ -62,6 +63,11 @@ impl Storage {
         )
         .execute(&*self.pool)
         .await;
+        let _ = sqlx::query(
+            r#"ALTER TABLE daily_stats ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;"#,
+        )
+        .execute(&*self.pool)
+        .await;
 
         sqlx::query(
             r#"
@@ -74,6 +80,7 @@ impl Storage {
                 cached_prompt_tokens INTEGER NOT NULL,
                 completion_tokens INTEGER NOT NULL,
                 total_tokens INTEGER NOT NULL,
+                reasoning_tokens INTEGER NOT NULL,
                 cost_usd REAL NOT NULL,
                 usage_included INTEGER NOT NULL DEFAULT 1
             );
@@ -92,6 +99,11 @@ impl Storage {
         let _ = sqlx::query(r#"ALTER TABLE event_log ADD COLUMN conversation_id TEXT;"#)
             .execute(&*self.pool)
             .await;
+        let _ = sqlx::query(
+            r#"ALTER TABLE event_log ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;"#,
+        )
+        .execute(&*self.pool)
+        .await;
         let _ = sqlx::query(
             r#"ALTER TABLE event_log ADD COLUMN usage_included INTEGER NOT NULL DEFAULT 1;"#,
         )
@@ -119,18 +131,20 @@ impl Storage {
         cached_prompt_tokens: u64,
         completion_tokens: u64,
         total_tokens: u64,
+        reasoning_tokens: u64,
         cost_usd: f64,
     ) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO daily_stats (
-                date, model, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                date, model, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, cost_usd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(date, model) DO UPDATE SET
                 prompt_tokens = prompt_tokens + excluded.prompt_tokens,
                 cached_prompt_tokens = cached_prompt_tokens + excluded.cached_prompt_tokens,
                 completion_tokens = completion_tokens + excluded.completion_tokens,
                 total_tokens = total_tokens + excluded.total_tokens,
+                reasoning_tokens = reasoning_tokens + excluded.reasoning_tokens,
                 cost_usd = cost_usd + excluded.cost_usd;
             "#,
         )
@@ -140,6 +154,7 @@ impl Storage {
         .bind(i64::try_from(cached_prompt_tokens).unwrap_or(i64::MAX))
         .bind(i64::try_from(completion_tokens).unwrap_or(i64::MAX))
         .bind(i64::try_from(total_tokens).unwrap_or(i64::MAX))
+        .bind(i64::try_from(reasoning_tokens).unwrap_or(i64::MAX))
         .bind(cost_usd)
         .execute(&*self.pool)
         .await
@@ -158,14 +173,15 @@ impl Storage {
         cached_prompt_tokens: u64,
         completion_tokens: u64,
         total_tokens: u64,
+        reasoning_tokens: u64,
         cost_usd: f64,
         usage_included: bool,
     ) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO event_log (
-                timestamp, title, summary, conversation_id, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, cost_usd, usage_included
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                timestamp, title, summary, conversation_id, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, reasoning_tokens, cost_usd, usage_included
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             "#,
         )
         .bind(timestamp.to_rfc3339())
@@ -176,6 +192,7 @@ impl Storage {
         .bind(i64::try_from(cached_prompt_tokens).unwrap_or(i64::MAX))
         .bind(i64::try_from(completion_tokens).unwrap_or(i64::MAX))
         .bind(i64::try_from(total_tokens).unwrap_or(i64::MAX))
+        .bind(i64::try_from(reasoning_tokens).unwrap_or(i64::MAX))
         .bind(cost_usd)
         .bind(usage_included)
         .execute(&*self.pool)
@@ -196,6 +213,7 @@ impl Storage {
                 COALESCE(SUM(cached_prompt_tokens), 0) as cached_prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) as completion_tokens,
                 COALESCE(SUM(total_tokens), 0) as total_tokens,
+                COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
                 COALESCE(SUM(cost_usd), 0.0) as cost_usd
             FROM daily_stats
             WHERE date BETWEEN ? AND ?
@@ -212,6 +230,7 @@ impl Storage {
             cached_prompt_tokens: row.try_get::<i64, _>("cached_prompt_tokens").unwrap_or(0) as u64,
             completion_tokens: row.try_get::<i64, _>("completion_tokens").unwrap_or(0) as u64,
             total_tokens: row.try_get::<i64, _>("total_tokens").unwrap_or(0) as u64,
+            reasoning_tokens: row.try_get::<i64, _>("reasoning_tokens").unwrap_or(0) as u64,
             cost_usd: row.try_get::<f64, _>("cost_usd").unwrap_or(0.0),
         })
     }
@@ -225,6 +244,7 @@ impl Storage {
                    SUM(cached_prompt_tokens) AS cached_prompt_tokens,
                    SUM(completion_tokens) AS completion_tokens,
                    SUM(total_tokens) AS total_tokens,
+                   SUM(reasoning_tokens) AS reasoning_tokens,
                    SUM(cost_usd) AS cost_usd
             FROM daily_stats
             GROUP BY date
@@ -249,6 +269,7 @@ impl Storage {
                     as u64,
                 completion_tokens: row.try_get::<i64, _>("completion_tokens").unwrap_or(0) as u64,
                 total_tokens: row.try_get::<i64, _>("total_tokens").unwrap_or(0) as u64,
+                reasoning_tokens: row.try_get::<i64, _>("reasoning_tokens").unwrap_or(0) as u64,
                 cost_usd: row.try_get::<f64, _>("cost_usd").unwrap_or(0.0),
             });
         }
@@ -269,6 +290,7 @@ impl Storage {
                 COALESCE(SUM(cached_prompt_tokens), 0) as cached_prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) as completion_tokens,
                 COALESCE(SUM(total_tokens), 0) as total_tokens,
+                COALESCE(SUM(reasoning_tokens), 0) as reasoning_tokens,
                 COALESCE(SUM(cost_usd), 0.0) as cost_usd
             FROM event_log
             WHERE timestamp >= ?
@@ -284,6 +306,7 @@ impl Storage {
             cached_prompt_tokens: row.try_get::<i64, _>("cached_prompt_tokens").unwrap_or(0) as u64,
             completion_tokens: row.try_get::<i64, _>("completion_tokens").unwrap_or(0) as u64,
             total_tokens: row.try_get::<i64, _>("total_tokens").unwrap_or(0) as u64,
+            reasoning_tokens: row.try_get::<i64, _>("reasoning_tokens").unwrap_or(0) as u64,
             cost_usd: row.try_get::<f64, _>("cost_usd").unwrap_or(0.0),
         })
     }
@@ -296,6 +319,7 @@ pub struct AggregateTotals {
     pub completion_tokens: u64,
     #[allow(dead_code)]
     pub total_tokens: u64,
+    pub reasoning_tokens: u64,
     pub cost_usd: f64,
 }
 
@@ -307,6 +331,7 @@ pub struct DailyStatRow {
     pub cached_prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+    pub reasoning_tokens: u64,
     pub cost_usd: f64,
 }
 
@@ -325,15 +350,15 @@ mod tests {
         let day2 = NaiveDate::from_ymd_opt(2025, 11, 15).unwrap();
 
         storage
-            .record_daily_stat(day1, "gpt-4.1", 100, 80, 200, 300, 0.5)
+            .record_daily_stat(day1, "gpt-4.1", 100, 80, 200, 300, 40, 0.5)
             .await
             .unwrap();
         storage
-            .record_daily_stat(day1, "gpt-4o", 50, 20, 50, 100, 0.2)
+            .record_daily_stat(day1, "gpt-4o", 50, 20, 50, 100, 5, 0.2)
             .await
             .unwrap();
         storage
-            .record_daily_stat(day2, "gpt-4.1", 20, 5, 30, 50, 0.05)
+            .record_daily_stat(day2, "gpt-4.1", 20, 5, 30, 50, 2, 0.05)
             .await
             .unwrap();
 
@@ -342,13 +367,16 @@ mod tests {
         assert_eq!(totals.cached_prompt_tokens, 105);
         assert_eq!(totals.completion_tokens, 280);
         assert_eq!(totals.total_tokens, 450);
+        assert_eq!(totals.reasoning_tokens, 47);
         assert!((totals.cost_usd - 0.75).abs() < f64::EPSILON);
 
         let recent = storage.recent_daily_stats(2).await.unwrap();
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].date, day2);
         assert_eq!(recent[0].total_tokens, 50);
+        assert_eq!(recent[0].reasoning_tokens, 2);
         assert_eq!(recent[1].date, day1);
         assert_eq!(recent[1].total_tokens, 400);
+        assert_eq!(recent[1].reasoning_tokens, 45);
     }
 }
