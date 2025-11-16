@@ -500,8 +500,8 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
     let widths = [
         Constraint::Length(10),
         Constraint::Length(18),
-        Constraint::Length(16),
-        Constraint::Length(20),
+        Constraint::Length(32),
+        Constraint::Length(40),
         Constraint::Length(16),
         Constraint::Length(11),
         Constraint::Length(9),
