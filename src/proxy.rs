@@ -31,6 +31,8 @@ use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use tokio_stream::{Stream, StreamExt};
 
 const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
+const TITLE_MAX_CHARS: usize = 100;
+const SUMMARY_MAX_CHARS: usize = 160;
 const HOP_BY_HOP_REQUEST_HEADERS: &[&str] = &[
     "connection",
     "keep-alive",
@@ -159,6 +161,7 @@ async fn proxy_handler(
         .await
         .map_err(|err| map_body_error(err))?;
     let model_hint = extract_model_from_request_body(&body_bytes);
+    let title_hint = extract_title_from_request_body(&body_bytes);
 
     if !body_bytes.is_empty() {
         request_builder = request_builder.body(body_bytes);
@@ -174,7 +177,7 @@ async fn proxy_handler(
     let filtered_headers = filter_response_headers(&raw_headers);
     let is_streaming = is_event_stream(&raw_headers);
 
-    let (body, response_usage) = if is_streaming {
+    let (body, response_capture) = if is_streaming {
         let (usage_tx, usage_rx) = oneshot::channel();
         let stream = upstream_response
             .bytes_stream()
@@ -184,11 +187,19 @@ async fn proxy_handler(
 
         let state_clone = state.clone();
         let model_hint_stream = model_hint.clone();
+        let title_hint_stream = title_hint.clone();
         tokio::spawn(async move {
-            match usage_rx.await {
-                Ok(usage) => emit_usage_event(&state_clone, model_hint_stream, usage),
-                Err(_) => emit_usage_event(&state_clone, model_hint_stream, None),
-            }
+            let capture = usage_rx.await.unwrap_or(UsageCapture {
+                usage: None,
+                summary: None,
+            });
+            emit_usage_event(
+                &state_clone,
+                model_hint_stream,
+                title_hint_stream,
+                capture.summary,
+                capture.usage,
+            );
         });
 
         (body, None)
@@ -197,8 +208,8 @@ async fn proxy_handler(
             tracing::error!(error = %err, "failed to buffer upstream response body");
             StatusCode::BAD_GATEWAY
         })?;
-        let usage = extract_usage_from_response_body(&bytes);
-        (Body::from(bytes), usage)
+        let capture = extract_usage_capture_from_response(&bytes);
+        (Body::from(bytes), Some(capture))
     };
 
     let mut response = Response::builder()
@@ -212,7 +223,17 @@ async fn proxy_handler(
     *response.headers_mut() = filtered_headers;
 
     if !is_streaming {
-        emit_usage_event(&state, model_hint, response_usage);
+        if let Some(capture) = response_capture {
+            emit_usage_event(
+                &state,
+                model_hint,
+                title_hint,
+                capture.summary,
+                capture.usage,
+            );
+        } else {
+            emit_usage_event(&state, model_hint, title_hint, None, None);
+        }
     }
 
     Ok(response)
@@ -339,7 +360,13 @@ fn map_body_error(err: AxumCoreError) -> StatusCode {
     }
 }
 
-fn emit_usage_event(state: &ProxyState, model_hint: Option<String>, usage: Option<UsageMetrics>) {
+fn emit_usage_event(
+    state: &ProxyState,
+    model_hint: Option<String>,
+    title_hint: Option<String>,
+    summary_hint: Option<String>,
+    usage: Option<UsageMetrics>,
+) {
     let (model_name, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens) =
         if let Some(usage) = usage {
             let model = usage
@@ -373,6 +400,8 @@ fn emit_usage_event(state: &ProxyState, model_hint: Option<String>, usage: Optio
     let event = UsageEvent {
         timestamp: Utc::now(),
         model: model_name,
+        title: title_hint,
+        summary: summary_hint,
         prompt_tokens,
         cached_prompt_tokens,
         completion_tokens,
@@ -396,6 +425,213 @@ fn extract_model_from_request_body(body: &Bytes) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+fn extract_title_from_request_body(body: &Bytes) -> Option<String> {
+    if body.is_empty() {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let raw = extract_title_from_value(&value)?;
+    format_snippet(&raw, TITLE_MAX_CHARS)
+}
+
+fn extract_title_from_value(value: &Value) -> Option<String> {
+    if let Some(input) = value.get("input").and_then(|v| v.as_array()) {
+        if let Some(text) = find_user_text(input) {
+            return Some(text);
+        }
+    }
+    if let Some(messages) = value.get("messages").and_then(|v| v.as_array()) {
+        if let Some(text) = find_user_text(messages) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn find_user_text(items: &[Value]) -> Option<String> {
+    for item in items {
+        let role = item
+            .get("role")
+            .and_then(|r| r.as_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if role != "user" {
+            continue;
+        }
+        if let Some(content) = item.get("content") {
+            if let Some(text) = extract_text_from_content(content) {
+                if !text.trim().is_empty() {
+                    return Some(text);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_text_from_content(value: &Value) -> Option<String> {
+    if let Some(arr) = value.as_array() {
+        for entry in arr {
+            if let Some(text) = entry.get("text").and_then(|t| t.as_str()) {
+                if let Some(filtered) = filter_title_candidate(text) {
+                    return Some(filtered);
+                }
+            }
+        }
+        return None;
+    }
+    if let Some(text) = value.as_str() {
+        return filter_title_candidate(text);
+    }
+    None
+}
+
+fn extract_usage_capture_from_response(body: &Bytes) -> UsageCapture {
+    if body.is_empty() {
+        return UsageCapture {
+            usage: None,
+            summary: None,
+        };
+    }
+    match serde_json::from_slice::<Value>(body) {
+        Ok(value) => UsageCapture {
+            usage: usage_from_value(&value),
+            summary: extract_summary_from_value(&value),
+        },
+        Err(_) => UsageCapture {
+            usage: None,
+            summary: None,
+        },
+    }
+}
+
+fn extract_summary_from_value(value: &Value) -> Option<String> {
+    if let Some(output) = value.get("output").and_then(|v| v.as_array()) {
+        for item in output {
+            if let Some(text) = extract_assistant_message_text(item) {
+                return format_snippet(&text, SUMMARY_MAX_CHARS);
+            }
+        }
+    }
+
+    if let Some(choices) = value.get("choices").and_then(|v| v.as_array()) {
+        for choice in choices {
+            if let Some(message) = choice.get("message") {
+                if let Some(text) = extract_chat_message_text(message) {
+                    return format_snippet(&text, SUMMARY_MAX_CHARS);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_chat_message_text(message: &Value) -> Option<String> {
+    if let Some(text) = message.get("content").and_then(|v| v.as_str()) {
+        return Some(text.to_string());
+    }
+    if let Some(parts) = message.get("content").and_then(|v| v.as_array()) {
+        let mut acc = String::new();
+        for part in parts {
+            if part
+                .get("type")
+                .and_then(|t| t.as_str())
+                .map(|t| t.eq_ignore_ascii_case("text"))
+                .unwrap_or(false)
+            {
+                if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                    if !text.trim().is_empty() {
+                        if !acc.is_empty() {
+                            acc.push(' ');
+                        }
+                        acc.push_str(text.trim());
+                    }
+                }
+            }
+        }
+        if !acc.is_empty() {
+            return Some(acc);
+        }
+    }
+    None
+}
+
+fn extract_assistant_message_text(item: &Value) -> Option<String> {
+    let item_type = item.get("type").and_then(|v| v.as_str())?;
+    if !item_type.eq_ignore_ascii_case("message") {
+        return None;
+    }
+    let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("");
+    if !role.eq_ignore_ascii_case("assistant") {
+        return None;
+    }
+    let content = item.get("content").and_then(|v| v.as_array())?;
+    let mut acc = String::new();
+    for block in content {
+        if block
+            .get("type")
+            .and_then(|t| t.as_str())
+            .map(|t| t.eq_ignore_ascii_case("output_text"))
+            .unwrap_or(false)
+        {
+            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                if !text.trim().is_empty() {
+                    if !acc.is_empty() {
+                        acc.push(' ');
+                    }
+                    acc.push_str(text.trim());
+                }
+            }
+        }
+    }
+    if acc.is_empty() { None } else { Some(acc) }
+}
+
+fn filter_title_candidate(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("<environment_context>")
+        || lower.contains("<environment_context>")
+        || lower.contains("# agents.md instructions")
+        || lower.contains("<instructions>")
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+fn format_snippet(text: &str, max_chars: usize) -> Option<String> {
+    let mut collapsed = String::new();
+    for word in text.split_whitespace() {
+        if !collapsed.is_empty() {
+            collapsed.push(' ');
+        }
+        collapsed.push_str(word);
+    }
+    if collapsed.is_empty() {
+        return None;
+    }
+    if collapsed.chars().count() <= max_chars {
+        return Some(collapsed);
+    }
+    let mut truncated = String::new();
+    for ch in collapsed.chars().take(max_chars.saturating_sub(1)) {
+        truncated.push(ch);
+    }
+    let trimmed = truncated.trim_end().to_string();
+    let mut result = if trimmed.is_empty() {
+        truncated
+    } else {
+        trimmed
+    };
+    result.push('…');
+    Some(result)
+}
+
 #[derive(Debug, Clone)]
 struct UsageMetrics {
     model: Option<String>,
@@ -405,12 +641,10 @@ struct UsageMetrics {
     total_tokens: u64,
 }
 
-fn extract_usage_from_response_body(body: &Bytes) -> Option<UsageMetrics> {
-    if body.is_empty() {
-        return None;
-    }
-    let value: Value = serde_json::from_slice(body).ok()?;
-    usage_from_value(&value)
+#[derive(Debug, Clone)]
+struct UsageCapture {
+    usage: Option<UsageMetrics>,
+    summary: Option<String>,
 }
 
 fn usage_from_value(value: &Value) -> Option<UsageMetrics> {
@@ -450,11 +684,11 @@ fn parse_usage_from_sse_data(payload: &str) -> Option<UsageMetrics> {
 struct SseUsageTap<S> {
     inner: S,
     parser: SseUsageParser,
-    usage_tx: Option<oneshot::Sender<Option<UsageMetrics>>>,
+    usage_tx: Option<oneshot::Sender<UsageCapture>>,
 }
 
 impl<S> SseUsageTap<S> {
-    fn new(inner: S, usage_tx: oneshot::Sender<Option<UsageMetrics>>) -> Self {
+    fn new(inner: S, usage_tx: oneshot::Sender<UsageCapture>) -> Self {
         Self {
             inner,
             parser: SseUsageParser::new(),
@@ -464,8 +698,8 @@ impl<S> SseUsageTap<S> {
 
     fn send_usage(&mut self) {
         if let Some(tx) = self.usage_tx.take() {
-            let usage = self.parser.take_usage();
-            let _ = tx.send(usage);
+            let capture = self.parser.take_capture();
+            let _ = tx.send(capture);
         }
     }
 }
@@ -519,6 +753,7 @@ where
 struct SseUsageParser {
     buffer: BytesMut,
     usage: Option<UsageMetrics>,
+    summary_buffer: String,
 }
 
 impl SseUsageParser {
@@ -526,6 +761,7 @@ impl SseUsageParser {
         Self {
             buffer: BytesMut::new(),
             usage: None,
+            summary_buffer: String::new(),
         }
     }
 
@@ -569,13 +805,48 @@ impl SseUsageParser {
 
         tracing::trace!(payload = %data_payload, "sse event data");
 
-        if let Some(usage) = parse_usage_from_sse_data(&data_payload) {
-            self.usage = Some(usage);
+        self.process_payload(&data_payload);
+    }
+
+    fn process_payload(&mut self, payload: &str) {
+        let Ok(value) = serde_json::from_str::<Value>(payload) else {
+            return;
+        };
+        let Some(kind) = value.get("type").and_then(|v| v.as_str()) else {
+            return;
+        };
+        match kind {
+            "response.completed" => {
+                if let Some(resp) = value.get("response") {
+                    if let Some(usage) = usage_from_value(resp) {
+                        self.usage = Some(usage);
+                    }
+                }
+            }
+            "response.output_item.done" => {
+                if let Some(item) = value.get("item") {
+                    if let Some(text) = extract_assistant_message_text(item) {
+                        if !self.summary_buffer.is_empty() {
+                            self.summary_buffer.push(' ');
+                        }
+                        self.summary_buffer.push_str(&text);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
-    fn take_usage(&mut self) -> Option<UsageMetrics> {
-        self.usage.clone()
+    fn take_capture(&mut self) -> UsageCapture {
+        let summary = if self.summary_buffer.is_empty() {
+            None
+        } else {
+            format_snippet(&self.summary_buffer, SUMMARY_MAX_CHARS)
+        };
+        UsageCapture {
+            usage: self.usage.clone(),
+            summary,
+        }
     }
 }
 
@@ -614,7 +885,8 @@ mod tests {
         let mut parser = SseUsageParser::new();
         let chunk = b"data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-4.1-mini\",\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}}\n\n";
         parser.feed(chunk);
-        let usage = parser.take_usage().expect("usage parsed");
+        let capture = parser.take_capture();
+        let usage = capture.usage.expect("usage parsed");
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.cached_prompt_tokens, 0);
         assert_eq!(usage.completion_tokens, 4);

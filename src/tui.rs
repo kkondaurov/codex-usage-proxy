@@ -157,7 +157,10 @@ fn build_summary_row<'a>(label: &'a str, totals: &AggregateTotals, style: Style)
 }
 
 fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recent: &[UsageEvent]) {
-    let header = Row::new(vec!["Time", "Model", "Input", "Cached", "Output", "Cost"]).style(
+    let header = Row::new(vec![
+        "Time", "Title", "Result", "Model", "Input", "Cached", "Output", "Cost",
+    ])
+    .style(
         Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::BOLD),
@@ -167,6 +170,8 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
         vec![Row::new(vec![
             "–",
             "No recent requests",
+            "No recent responses",
+            "–",
             "–",
             "–",
             "–",
@@ -179,6 +184,8 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
             .map(|event| {
                 Row::new(vec![
                     event.timestamp.format("%H:%M:%S").to_string(),
+                    event.title.clone().unwrap_or_else(|| "—".to_string()),
+                    event.summary.clone().unwrap_or_else(|| "—".to_string()),
                     event.model.clone(),
                     format_tokens(event.prompt_tokens),
                     format_tokens(event.cached_prompt_tokens),
@@ -191,7 +198,9 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
 
     let widths = [
         Constraint::Length(10),
-        Constraint::Length(20),
+        Constraint::Length(24),
+        Constraint::Length(28),
+        Constraint::Length(16),
         Constraint::Length(12),
         Constraint::Length(12),
         Constraint::Length(12),

@@ -11,6 +11,8 @@ use tokio::{sync::mpsc, task::JoinHandle};
 pub struct UsageEvent {
     pub timestamp: DateTime<Utc>,
     pub model: String,
+    pub title: Option<String>,
+    pub summary: Option<String>,
     pub prompt_tokens: u64,
     pub cached_prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -91,6 +93,8 @@ impl UsageAggregator {
         self.storage
             .record_event(
                 event.timestamp,
+                event.title.as_deref(),
+                event.summary.as_deref(),
                 event.prompt_tokens,
                 event.cached_prompt_tokens,
                 event.completion_tokens,
@@ -159,6 +163,8 @@ mod tests {
         UsageEvent {
             timestamp: chrono::Utc.timestamp_opt(id as i64, 0).unwrap(),
             model: format!("model-{id}"),
+            title: Some(format!("title-{id}")),
+            summary: Some(format!("summary-{id}")),
             prompt_tokens: id as u64,
             cached_prompt_tokens: (id / 2).max(0) as u64,
             completion_tokens: id as u64,
@@ -205,6 +211,8 @@ mod tests {
         let event = UsageEvent {
             timestamp: chrono::Utc::now(),
             model: "gpt-4.1".to_string(),
+            title: Some("sample".to_string()),
+            summary: Some("result".to_string()),
             prompt_tokens: 120,
             cached_prompt_tokens: 100,
             completion_tokens: 80,

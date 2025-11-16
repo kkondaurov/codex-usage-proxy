@@ -67,6 +67,8 @@ impl Storage {
             r#"
             CREATE TABLE IF NOT EXISTS event_log (
                 timestamp TEXT NOT NULL,
+                title TEXT,
+                summary TEXT,
                 prompt_tokens INTEGER NOT NULL,
                 cached_prompt_tokens INTEGER NOT NULL,
                 completion_tokens INTEGER NOT NULL,
@@ -78,6 +80,13 @@ impl Storage {
         .execute(&*self.pool)
         .await
         .with_context(|| "failed to ensure event_log schema")?;
+
+        let _ = sqlx::query(r#"ALTER TABLE event_log ADD COLUMN title TEXT;"#)
+            .execute(&*self.pool)
+            .await;
+        let _ = sqlx::query(r#"ALTER TABLE event_log ADD COLUMN summary TEXT;"#)
+            .execute(&*self.pool)
+            .await;
 
         sqlx::query(
             r#"
@@ -132,6 +141,8 @@ impl Storage {
     pub async fn record_event(
         &self,
         timestamp: DateTime<Utc>,
+        title: Option<&str>,
+        summary: Option<&str>,
         prompt_tokens: u64,
         cached_prompt_tokens: u64,
         completion_tokens: u64,
@@ -141,11 +152,13 @@ impl Storage {
         sqlx::query(
             r#"
             INSERT INTO event_log (
-                timestamp, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?);
+                timestamp, title, summary, prompt_tokens, cached_prompt_tokens, completion_tokens, total_tokens, cost_usd
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             "#,
         )
         .bind(timestamp.to_rfc3339())
+        .bind(title)
+        .bind(summary)
         .bind(i64::try_from(prompt_tokens).unwrap_or(i64::MAX))
         .bind(i64::try_from(cached_prompt_tokens).unwrap_or(i64::MAX))
         .bind(i64::try_from(completion_tokens).unwrap_or(i64::MAX))
