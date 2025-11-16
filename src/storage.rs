@@ -1,6 +1,6 @@
 use crate::tokens::blended_total;
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
@@ -602,6 +602,57 @@ impl Storage {
 
         Ok(turns)
     }
+
+    pub async fn hourly_usage_for_day(&self, day: NaiveDate) -> Result<Vec<HourlyTotals>> {
+        let start = day.and_hms_opt(0, 0, 0).unwrap();
+        let next_day = day.succ_opt().unwrap_or(day);
+        let end = next_day.and_hms_opt(0, 0, 0).unwrap();
+        let start_dt = Utc.from_utc_datetime(&start);
+        let end_dt = Utc.from_utc_datetime(&end);
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                strftime('%H', timestamp) AS hour,
+                SUM(prompt_tokens) AS prompt_tokens,
+                SUM(cached_prompt_tokens) AS cached_prompt_tokens,
+                SUM(completion_tokens) AS completion_tokens,
+                SUM(total_tokens) AS total_tokens,
+                SUM(reasoning_tokens) AS reasoning_tokens,
+                SUM(cost_usd) AS cost_usd
+            FROM event_log
+            WHERE timestamp >= ? AND timestamp < ?
+            GROUP BY hour
+            ORDER BY hour ASC
+            "#,
+        )
+        .bind(start_dt.to_rfc3339())
+        .bind(end_dt.to_rfc3339())
+        .fetch_all(&*self.pool)
+        .await
+        .with_context(|| "failed to load hourly usage")?;
+
+        let mut totals = Vec::with_capacity(rows.len());
+        for row in rows {
+            let hour_str: String = row.try_get("hour")?;
+            let hour = hour_str.parse::<u32>().unwrap_or(0);
+            totals.push(HourlyTotals {
+                hour,
+                totals: AggregateTotals {
+                    prompt_tokens: row.try_get::<i64, _>("prompt_tokens").unwrap_or(0) as u64,
+                    cached_prompt_tokens: row.try_get::<i64, _>("cached_prompt_tokens").unwrap_or(0)
+                        as u64,
+                    completion_tokens: row.try_get::<i64, _>("completion_tokens").unwrap_or(0)
+                        as u64,
+                    total_tokens: row.try_get::<i64, _>("total_tokens").unwrap_or(0) as u64,
+                    reasoning_tokens: row.try_get::<i64, _>("reasoning_tokens").unwrap_or(0) as u64,
+                    cost_usd: row.try_get::<f64, _>("cost_usd").unwrap_or(0.0),
+                },
+            });
+        }
+
+        Ok(totals)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -670,6 +721,12 @@ impl ConversationTurn {
             self.completion_tokens,
         )
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct HourlyTotals {
+    pub hour: u32,
+    pub totals: AggregateTotals,
 }
 
 #[allow(dead_code)]
@@ -964,5 +1021,54 @@ mod tests {
         assert_eq!(unlabeled.len(), 1);
         assert_eq!(unlabeled[0].turn_index, 1);
         assert_eq!(unlabeled[0].prompt_tokens, 40);
+    }
+
+    #[tokio::test]
+    async fn hourly_usage_for_day_returns_hours_with_usage() {
+        let db_file = NamedTempFile::new().unwrap();
+        let storage = Storage::connect(db_file.path()).await.unwrap();
+        storage.ensure_schema().await.unwrap();
+
+        let day = NaiveDate::from_ymd_opt(2025, 11, 16).unwrap();
+        storage
+            .record_event(
+                Utc.from_utc_datetime(&day.and_hms_opt(9, 15, 0).unwrap()),
+                "model",
+                None,
+                None,
+                Some("conv"),
+                100,
+                20,
+                30,
+                130,
+                5,
+                0.5,
+                true,
+            )
+            .await
+            .unwrap();
+        storage
+            .record_event(
+                Utc.from_utc_datetime(&day.and_hms_opt(9, 45, 0).unwrap()),
+                "model",
+                None,
+                None,
+                Some("conv"),
+                50,
+                5,
+                10,
+                60,
+                1,
+                0.2,
+                true,
+            )
+            .await
+            .unwrap();
+
+        let hourly = storage.hourly_usage_for_day(day).await.unwrap();
+        assert_eq!(hourly.len(), 1);
+        assert_eq!(hourly[0].hour, 9);
+        assert_eq!(hourly[0].totals.prompt_tokens, 150);
+        assert_eq!(hourly[0].totals.completion_tokens, 40);
     }
 }

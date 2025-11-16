@@ -4,7 +4,9 @@ use crate::{
     usage::{RecentEvents, UsageEvent},
 };
 use anyhow::{Context, Result};
-use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
+use chrono::{
+    DateTime, Datelike, Duration as ChronoDuration, Months, NaiveDate, TimeZone, Timelike, Utc,
+};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
@@ -15,9 +17,11 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Cell, Row, Table},
+    text::{Line, Span},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
 use std::{
+    collections::HashMap,
     io::{self, Stdout},
     sync::Arc,
     time::Duration,
@@ -32,6 +36,17 @@ const TURN_VIEW_LIMIT: usize = 40;
 enum ViewMode {
     Overview,
     Conversations,
+    Stats,
+}
+
+impl ViewMode {
+    fn next(self) -> Self {
+        match self {
+            ViewMode::Overview => ViewMode::Conversations,
+            ViewMode::Conversations => ViewMode::Stats,
+            ViewMode::Stats => ViewMode::Overview,
+        }
+    }
 }
 
 pub async fn run(
@@ -96,6 +111,15 @@ fn run_blocking(
                 } else {
                     Vec::new()
                 };
+            let stats_breakdown = if matches!(view_mode, ViewMode::Stats) {
+                Some(
+                    runtime
+                        .block_on(StatsBreakdown::gather(&storage, Utc::now(), &stats))
+                        .context("failed to gather extended stats")?,
+                )
+            } else {
+                None
+            };
 
             terminal.draw(|frame| {
                 draw_ui(
@@ -107,6 +131,7 @@ fn run_blocking(
                     &conversation_view,
                     selected_conversation.as_ref(),
                     &conversation_turns,
+                    stats_breakdown.as_ref(),
                     view_mode,
                 );
             })?;
@@ -121,43 +146,44 @@ fn run_blocking(
                     }
 
                     match key.code {
-                        KeyCode::Char('c') => {
-                            view_mode = ViewMode::Conversations;
-                        }
-                        KeyCode::Char('o') | KeyCode::Esc => {
+                        KeyCode::Char('1') => {
                             view_mode = ViewMode::Overview;
                         }
-                        KeyCode::Left => {
-                            conversation_view.prev_period(conversation_stats.periods_len());
+                        KeyCode::Char('2') => {
+                            view_mode = ViewMode::Conversations;
                         }
-                        KeyCode::Right => {
-                            conversation_view.next_period(conversation_stats.periods_len());
+                        KeyCode::Char('3') => {
+                            view_mode = ViewMode::Stats;
                         }
-                        KeyCode::Char('h') => {
-                            conversation_view.prev_period(conversation_stats.periods_len());
+                        KeyCode::Tab => {
+                            view_mode = view_mode.next();
                         }
-                        KeyCode::Char('l') => {
-                            conversation_view.next_period(conversation_stats.periods_len());
+                        KeyCode::Esc => {
+                            view_mode = ViewMode::Overview;
                         }
-                        KeyCode::Up => {
-                            let rows = conversation_stats
-                                .active_period_len(conversation_view.active_period);
-                            conversation_view.move_selection_up(rows);
+                        KeyCode::Left | KeyCode::Char('h') => {
+                            if matches!(view_mode, ViewMode::Conversations) {
+                                conversation_view.prev_period(conversation_stats.periods_len());
+                            }
                         }
-                        KeyCode::Down => {
-                            let rows = conversation_stats
-                                .active_period_len(conversation_view.active_period);
-                            conversation_view.move_selection_down(rows);
+                        KeyCode::Right | KeyCode::Char('l') => {
+                            if matches!(view_mode, ViewMode::Conversations) {
+                                conversation_view.next_period(conversation_stats.periods_len());
+                            }
                         }
-                        KeyCode::Char('k') => {
-                            let rows = conversation_stats
-                                .active_period_len(conversation_view.active_period);
-                            conversation_view.move_selection_up(rows);
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if matches!(view_mode, ViewMode::Conversations) {
+                                let rows = conversation_stats
+                                    .active_period_len(conversation_view.active_period);
+                                conversation_view.move_selection_up(rows);
+                            }
                         }
-                        KeyCode::Char('j') => {
-                            let rows = conversation_stats
-                                .active_period_len(conversation_view.active_period);
-                            conversation_view.move_selection_down(rows);
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if matches!(view_mode, ViewMode::Conversations) {
+                                let rows = conversation_stats
+                                    .active_period_len(conversation_view.active_period);
+                                conversation_view.move_selection_down(rows);
+                            }
                         }
                         _ => {}
                     }
@@ -202,26 +228,40 @@ fn draw_ui(
     conversation_view: &ConversationViewState,
     selected: Option<&ConversationAggregate>,
     turns: &[ConversationTurn],
+    stats_breakdown: Option<&StatsBreakdown>,
     view_mode: ViewMode,
 ) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(frame.size());
+    render_navbar(frame, layout[0], view_mode);
+
     match view_mode {
-        ViewMode::Overview => draw_overview(frame, config, stats, recent),
-        ViewMode::Conversations => {
-            draw_conversation_view(frame, conversations, conversation_view, selected, turns)
-        }
+        ViewMode::Overview => draw_overview(frame, layout[1], config, stats, recent),
+        ViewMode::Conversations => draw_conversation_view(
+            frame,
+            layout[1],
+            conversations,
+            conversation_view,
+            selected,
+            turns,
+        ),
+        ViewMode::Stats => draw_stats_view(frame, layout[1], stats_breakdown),
     }
 }
 
 fn draw_overview(
     frame: &mut Frame,
+    area: Rect,
     config: &AppConfig,
     stats: &SummaryStats,
     recent: &[UsageEvent],
 ) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(10)])
-        .split(frame.size());
+        .constraints([Constraint::Length(6), Constraint::Min(10)])
+        .split(area);
 
     render_summary(frame, layout[0], stats);
     render_recent_events(frame, layout[1], config, recent);
@@ -229,6 +269,7 @@ fn draw_overview(
 
 fn draw_conversation_view(
     frame: &mut Frame,
+    area: Rect,
     conversations: &ConversationStats,
     view: &ConversationViewState,
     selected: Option<&ConversationAggregate>,
@@ -237,10 +278,92 @@ fn draw_conversation_view(
     let layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(frame.size());
+        .split(area);
 
     render_conversation_table(frame, layout[0], conversations, view);
     render_conversation_panel(frame, layout[1], selected, turns);
+}
+
+fn draw_stats_view(frame: &mut Frame, area: Rect, stats: Option<&StatsBreakdown>) {
+    match stats {
+        Some(data) => {
+            let widths = [
+                Constraint::Length(18),
+                Constraint::Length(14),
+                Constraint::Length(12),
+                Constraint::Length(12),
+                Constraint::Length(12),
+                Constraint::Length(12),
+                Constraint::Length(12),
+                Constraint::Length(12),
+            ];
+            let rows: Vec<Row> = data
+                .rows
+                .iter()
+                .map(|row| {
+                    Row::new(vec![
+                        row.label.clone(),
+                        format_cost(row.totals.cost_usd),
+                        format_tokens(row.totals.prompt_tokens),
+                        format_tokens(row.totals.cached_prompt_tokens),
+                        format_tokens(row.totals.completion_tokens),
+                        format_tokens(row.totals.reasoning_tokens),
+                        format_tokens(row.totals.blended_total()),
+                        format_tokens(row.totals.total_tokens),
+                    ])
+                })
+                .collect();
+
+            let table = Table::new(rows, widths)
+                .header(light_blue_header(vec![
+                    "Period",
+                    "Cost",
+                    "Input",
+                    "Cached",
+                    "Output",
+                    "Reasoning",
+                    "Blended",
+                    "API",
+                ]))
+                .block(gray_block("Detailed Usage Statistics"))
+                .column_spacing(1);
+
+            frame.render_widget(table, area);
+        }
+        None => {
+            let paragraph =
+                Paragraph::new("Loading stats…").block(gray_block("Detailed Usage Statistics"));
+            frame.render_widget(paragraph, area);
+        }
+    }
+}
+
+fn render_navbar(frame: &mut Frame, area: Rect, view_mode: ViewMode) {
+    let tabs = [
+        (ViewMode::Overview, "1 Overview"),
+        (ViewMode::Conversations, "2 Conversations"),
+        (ViewMode::Stats, "3 Stats"),
+    ];
+    let mut spans = Vec::new();
+    for (idx, (mode, label)) in tabs.iter().enumerate() {
+        let text = if *mode == view_mode {
+            Span::styled(
+                format!(" {label} "),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw(format!(" {label} "))
+        };
+        spans.push(text);
+        if idx < tabs.len() - 1 {
+            spans.push(Span::raw(" |"));
+        }
+    }
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(line).block(gray_block("Tabs (1/2/3, Tab to cycle, 'q' quits)"));
+    frame.render_widget(paragraph, area);
 }
 
 fn render_summary(frame: &mut Frame, area: Rect, stats: &SummaryStats) {
@@ -249,8 +372,6 @@ fn render_summary(frame: &mut Frame, area: Rect, stats: &SummaryStats) {
         build_summary_row("Last 10 min", &stats.last_10m, header_style),
         build_summary_row("Last 1 hr", &stats.last_hour, header_style),
         build_summary_row("Today", &stats.today, header_style),
-        build_summary_row("This Week", &stats.week, header_style),
-        build_summary_row("This Month", &stats.month, header_style),
     ];
 
     let widths = [
@@ -265,24 +386,17 @@ fn render_summary(frame: &mut Frame, area: Rect, stats: &SummaryStats) {
         Constraint::Length(16),
     ];
     let table = Table::new(rows, widths)
-        .header(
-            Row::new(vec![
-                "Period",
-                "Input",
-                "Cached",
-                "Output",
-                "Reasoning",
-                "Blended",
-                "API Total",
-                "Cost (USD)",
-            ])
-            .style(Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)),
-        )
-        .block(
-            Block::default()
-                .title("Usage Totals (press 'c' for Conversations view)")
-                .borders(Borders::ALL),
-        );
+        .header(light_blue_header(vec![
+            "Period",
+            "Cost (USD)",
+            "Input",
+            "Cached",
+            "Output",
+            "Reasoning",
+            "Blended",
+            "API Total",
+        ]))
+        .block(gray_block("Usage Totals"));
 
     frame.render_widget(table, area);
 }
@@ -290,35 +404,30 @@ fn render_summary(frame: &mut Frame, area: Rect, stats: &SummaryStats) {
 fn build_summary_row<'a>(label: &'a str, totals: &AggregateTotals, style: Style) -> Row<'a> {
     Row::new(vec![
         Cell::from(label).style(style),
+        Cell::from(format_cost(totals.cost_usd)),
         Cell::from(format_tokens(totals.prompt_tokens)),
         Cell::from(format_tokens(totals.cached_prompt_tokens)),
         Cell::from(format_tokens(totals.completion_tokens)),
         Cell::from(format_tokens(totals.reasoning_tokens)),
         Cell::from(format_tokens(totals.blended_total())),
         Cell::from(format_tokens(totals.total_tokens)),
-        Cell::from(format_cost(totals.cost_usd)),
     ])
 }
 
 fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recent: &[UsageEvent]) {
-    let header = Row::new(vec![
+    let header = light_blue_header(vec![
         "Time",
         "Title",
         "Result",
         "Model",
+        "Cost",
         "Input",
         "Cached",
         "Output",
         "Blended",
         "API",
         "Reasoning",
-        "Cost",
-    ])
-    .style(
-        Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD),
-    );
+    ]);
 
     let rows = if recent.is_empty() {
         vec![Row::new(vec![
@@ -344,13 +453,13 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
                     event.title.clone().unwrap_or_else(|| "—".to_string()),
                     event.summary.clone().unwrap_or_else(|| "—".to_string()),
                     event.model.clone(),
+                    format_usage_cost(event),
                     format_usage_tokens(event, event.prompt_tokens),
                     format_usage_tokens(event, event.cached_prompt_tokens),
                     format_usage_tokens(event, event.completion_tokens),
                     format_usage_tokens(event, event.blended_total()),
                     format_usage_tokens(event, event.total_tokens),
                     format_usage_tokens(event, event.reasoning_tokens),
-                    format_usage_cost(event),
                 ]);
 
                 if event.usage_included {
@@ -371,22 +480,18 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
         Constraint::Length(22),
         Constraint::Length(24),
         Constraint::Length(16),
-        Constraint::Length(9),
-        Constraint::Length(9),
-        Constraint::Length(9),
-        Constraint::Length(9),
-        Constraint::Length(9),
-        Constraint::Length(9),
         Constraint::Length(11),
+        Constraint::Length(9),
+        Constraint::Length(9),
+        Constraint::Length(9),
+        Constraint::Length(9),
+        Constraint::Length(9),
+        Constraint::Length(9),
     ];
 
     let table = Table::new(rows, widths)
         .header(header)
-        .block(
-            Block::default()
-                .title("Recent Requests (press 'q' to quit)")
-                .borders(Borders::ALL),
-        )
+        .block(gray_block("Recent Requests"))
         .column_spacing(1);
 
     frame.render_widget(table, area);
@@ -397,14 +502,12 @@ fn render_conversation_metadata(
     area: Rect,
     selected: Option<&ConversationAggregate>,
 ) {
-    let detail_block = Block::default()
-        .title("Conversation Details (←/→ period, ↑/↓ select, 'o' to overview)")
-        .borders(Borders::ALL);
+    let detail_block = gray_block("Conversation Details");
     let rows = selected
         .map(|aggregate| conversation_detail_rows(aggregate))
         .unwrap_or_else(|| vec![Row::new(vec!["Selected", "None"])]);
 
-    let table = Table::new(rows, [Constraint::Length(14), Constraint::Min(0)])
+    let table = Table::new(rows, [Constraint::Length(18), Constraint::Min(0)])
         .block(detail_block)
         .column_spacing(1);
     frame.render_widget(table, area);
@@ -424,11 +527,10 @@ fn render_turn_table(
             )
         })
         .unwrap_or_else(|| "Conversation Turns".to_string());
-    let block = Block::default().title(title).borders(Borders::ALL);
-    let header = Row::new(vec![
-        "#", "Time", "Model", "Input", "Cached", "Output", "Blended", "API", "Reason", "Cost",
-    ])
-    .style(Style::default().add_modifier(Modifier::BOLD));
+    let block = gray_block(title);
+    let header = light_blue_header(vec![
+        "#", "Time", "Model", "Cost", "Input", "Cached", "Output", "Blended", "API", "Reason",
+    ]);
 
     let rows: Vec<Row> = if turns.is_empty() {
         vec![Row::new(vec![
@@ -442,13 +544,13 @@ fn render_turn_table(
                     turn.turn_index.to_string(),
                     turn.timestamp.format("%H:%M:%S").to_string(),
                     truncate_text(&turn.model, 18),
+                    format_turn_cost(turn.usage_included, turn.cost_usd),
                     format_turn_tokens(turn.usage_included, turn.prompt_tokens),
                     format_turn_tokens(turn.usage_included, turn.cached_prompt_tokens),
                     format_turn_tokens(turn.usage_included, turn.completion_tokens),
                     format_turn_tokens(turn.usage_included, turn.blended_total()),
                     format_turn_tokens(turn.usage_included, turn.total_tokens),
                     format_turn_tokens(turn.usage_included, turn.reasoning_tokens),
-                    format_turn_cost(turn.usage_included, turn.cost_usd),
                 ])
             })
             .collect()
@@ -486,21 +588,16 @@ fn render_conversation_table(
             ("No Data", &[])
         };
 
-    let header = Row::new(vec![
+    let header = light_blue_header(vec![
         "Conversation",
+        "Cost",
         "Input",
         "Cached",
         "Output",
         "Blended",
         "API",
         "Reasoning",
-        "Cost",
-    ])
-    .style(
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    );
+    ]);
 
     let rows: Vec<Row> = if aggregates.is_empty() {
         vec![Row::new(vec![
@@ -520,13 +617,13 @@ fn render_conversation_table(
             .map(|(idx, aggregate)| {
                 let mut row = Row::new(vec![
                     format_conversation_label(aggregate.conversation_id.as_ref()),
+                    format_cost(aggregate.cost_usd),
                     format_tokens(aggregate.prompt_tokens),
                     format_tokens(aggregate.cached_prompt_tokens),
                     format_tokens(aggregate.completion_tokens),
                     format_tokens(aggregate.blended_total()),
                     format_tokens(aggregate.total_tokens),
                     format_tokens(aggregate.reasoning_tokens),
-                    format_cost(aggregate.cost_usd),
                 ]);
                 if idx == view.selected_row {
                     row = row.style(
@@ -543,24 +640,20 @@ fn render_conversation_table(
 
     let widths = [
         Constraint::Length(18),
-        Constraint::Length(10),
-        Constraint::Length(10),
-        Constraint::Length(10),
-        Constraint::Length(10),
-        Constraint::Length(10),
-        Constraint::Length(10),
         Constraint::Length(12),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(10),
     ];
     let table = Table::new(rows, widths)
         .header(header)
-        .block(
-            Block::default()
-                .title(format!(
-                    "Top Conversations – {} (lifetime totals; list filtered by period)",
-                    label
-                ))
-                .borders(Borders::ALL),
-        )
+        .block(gray_block(format!(
+            "Top Conversations – {} (←/→ switch period, ↑/↓ select)",
+            label
+        )))
         .column_spacing(1);
 
     frame.render_widget(table, area);
@@ -659,6 +752,121 @@ impl SummaryStats {
             month: month_totals,
         })
     }
+}
+
+impl StatsBreakdown {
+    async fn gather(storage: &Storage, now: DateTime<Utc>, summary: &SummaryStats) -> Result<Self> {
+        let today = now.date_naive();
+        let mut rows = Vec::new();
+        rows.push(StatRow::new("Last 10 min", summary.last_10m.clone()));
+        rows.push(StatRow::new("Last 1 hr", summary.last_hour.clone()));
+
+        let hourly_data = storage.hourly_usage_for_day(today).await?;
+        let mut hourly_map = HashMap::new();
+        for entry in hourly_data {
+            hourly_map.insert(entry.hour, entry.totals);
+        }
+        let mut hour = now.hour() as i32;
+        let mut shown = 0;
+        while hour >= 0 && shown < 12 {
+            let totals = hourly_map.get(&(hour as u32)).cloned().unwrap_or_default();
+            rows.push(StatRow::new(format!("Today {:02}:00", hour), totals));
+            hour -= 1;
+            shown += 1;
+        }
+
+        rows.push(StatRow::new("Today", summary.today.clone()));
+
+        for offset in 1..=7 {
+            let day = today
+                .checked_sub_signed(ChronoDuration::days(offset as i64))
+                .unwrap_or(today);
+            let totals = storage.totals_between(day, day).await?;
+            rows.push(StatRow::new(day.to_string(), totals));
+        }
+
+        let this_week_start = start_of_week(today);
+        rows.push(StatRow::new("This Week", summary.week.clone()));
+
+        let last_week_start = this_week_start
+            .checked_sub_signed(ChronoDuration::days(7))
+            .unwrap_or(this_week_start);
+        let last_week_end = this_week_start
+            .checked_sub_signed(ChronoDuration::days(1))
+            .unwrap_or(this_week_start);
+        let last_week = storage
+            .totals_between(last_week_start, last_week_end)
+            .await?;
+        rows.push(StatRow::new("Last Week", last_week));
+
+        rows.push(StatRow::new("This Month", summary.month.clone()));
+
+        let mut month_cursor = first_day_of_month(today);
+        for _ in 0..6 {
+            month_cursor = month_cursor
+                .checked_sub_months(chrono::Months::new(1))
+                .unwrap_or(month_cursor);
+            let month_end = end_of_month(month_cursor);
+            let totals = storage.totals_between(month_cursor, month_end).await?;
+            rows.push(StatRow::new(
+                format!("{}", month_cursor.format("%Y-%m")),
+                totals,
+            ));
+        }
+
+        let year_start = NaiveDate::from_ymd_opt(today.year(), 1, 1).unwrap();
+        let this_year = storage.totals_between(year_start, today).await?;
+        rows.push(StatRow::new(
+            format!("This Year ({})", today.year()),
+            this_year,
+        ));
+
+        let last_year_start = NaiveDate::from_ymd_opt(today.year() - 1, 1, 1).unwrap();
+        let last_year_end = NaiveDate::from_ymd_opt(today.year() - 1, 12, 31).unwrap();
+        let last_year = storage
+            .totals_between(last_year_start, last_year_end)
+            .await?;
+        rows.push(StatRow::new(
+            format!("Last Year ({})", today.year() - 1),
+            last_year,
+        ));
+
+        Ok(Self { rows })
+    }
+}
+
+impl StatRow {
+    fn new(label: impl Into<String>, totals: AggregateTotals) -> Self {
+        Self {
+            label: label.into(),
+            totals,
+        }
+    }
+}
+
+fn start_of_week(date: NaiveDate) -> NaiveDate {
+    let days_from_monday = date.weekday().num_days_from_monday() as i64;
+    date.checked_sub_signed(ChronoDuration::days(days_from_monday))
+        .unwrap_or(date)
+}
+
+fn first_day_of_month(date: NaiveDate) -> NaiveDate {
+    NaiveDate::from_ymd_opt(date.year(), date.month(), 1).unwrap()
+}
+
+fn end_of_month(start: NaiveDate) -> NaiveDate {
+    let next = start.checked_add_months(Months::new(1)).unwrap_or(start);
+    next.checked_sub_signed(ChronoDuration::days(1))
+        .unwrap_or(start)
+}
+
+struct StatsBreakdown {
+    rows: Vec<StatRow>,
+}
+
+struct StatRow {
+    label: String,
+    totals: AggregateTotals,
 }
 
 struct ConversationStats {
@@ -841,8 +1049,6 @@ fn conversation_detail_rows(aggregate: &ConversationAggregate) -> Vec<Row<'stati
             "Conversation",
             full_conversation_label(aggregate.conversation_id.as_ref()),
         ),
-        detail_row("Blended Total", format_tokens(aggregate.blended_total())),
-        detail_row("API Total", format_tokens(aggregate.total_tokens)),
         detail_row(
             "First Prompt",
             format_detail_snippet(aggregate.first_title.as_ref()),
@@ -850,10 +1056,6 @@ fn conversation_detail_rows(aggregate: &ConversationAggregate) -> Vec<Row<'stati
         detail_row(
             "Last Result",
             format_detail_snippet(aggregate.last_summary.as_ref()),
-        ),
-        detail_row(
-            "Data Scope",
-            "Lifetime totals & turns; period only filters which conversations appear".to_string(),
         ),
     ]
 }
@@ -891,4 +1093,19 @@ fn truncate_text(input: &str, max_chars: usize) -> String {
     }
     truncated.push('…');
     truncated
+}
+
+fn light_blue_header(labels: Vec<&'static str>) -> Row<'static> {
+    Row::new(labels).style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+fn gray_block(title: impl Into<String>) -> Block<'static> {
+    Block::default()
+        .title(title.into())
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
 }
