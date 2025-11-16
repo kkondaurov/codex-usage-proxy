@@ -417,6 +417,7 @@ fn build_summary_row<'a>(label: &'a str, totals: &AggregateTotals, style: Style)
 fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recent: &[UsageEvent]) {
     let header = light_blue_header(vec![
         "Time",
+        "Conversation",
         "Title",
         "Result",
         "Model",
@@ -450,6 +451,7 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
             .map(|event| {
                 let row = Row::new(vec![
                     event.timestamp.format("%H:%M:%S").to_string(),
+                    format_conversation_label(event.conversation_id.as_ref()),
                     event.title.clone().unwrap_or_else(|| "—".to_string()),
                     event.summary.clone().unwrap_or_else(|| "—".to_string()),
                     event.model.clone(),
@@ -477,8 +479,9 @@ fn render_recent_events(frame: &mut Frame, area: Rect, config: &AppConfig, recen
 
     let widths = [
         Constraint::Length(10),
-        Constraint::Length(22),
-        Constraint::Length(24),
+        Constraint::Length(18),
+        Constraint::Length(16),
+        Constraint::Length(20),
         Constraint::Length(16),
         Constraint::Length(11),
         Constraint::Length(9),
