@@ -28,7 +28,6 @@ use std::{
 };
 use tokio::runtime::Handle;
 
-const TOP_CONVERSATION_LIMIT: usize = 10;
 const DETAIL_SNIPPET_LIMIT: usize = 120;
 const TURN_VIEW_LIMIT: usize = 40;
 
@@ -82,11 +81,12 @@ fn run_blocking(
             let stats = runtime
                 .block_on(SummaryStats::gather(&storage, today))
                 .context("failed to gather summary stats")?;
+            let conversation_limit = config.display.recent_events_capacity.max(50);
             let conversation_stats = runtime
                 .block_on(ConversationStats::gather(
                     &storage,
                     today,
-                    TOP_CONVERSATION_LIMIT,
+                    conversation_limit,
                 ))
                 .context("failed to gather conversation aggregates")?;
             conversation_view.sync_with(&conversation_stats);
