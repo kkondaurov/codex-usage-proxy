@@ -6,6 +6,7 @@
 /usage.db
 /usage.db-wal
 /usage.db-shm
+/codex-usage.log
 
 # local config
 codex-usage.toml
