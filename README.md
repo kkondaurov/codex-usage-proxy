@@ -11,17 +11,17 @@ Under the hood, it's a local HTTP proxy that forwards every request upstream whi
 ## Screenshots
 <details>
 
-<summary>Current costs and last requests</summary>
+<summary>Last conversations with cost breakdown</summary>
 
-![overview](/screenshots/1-overview.png)
+![overview](/screenshots/1-overview-last-convos.png)
 
 </details>
 
 <details>
 
-<summary>Top conversations by cost per day, week and month</summary>
+<summary>Top conversations by cost per day, week, month, and all time</summary>
 
-![overview](/screenshots/2-conversations.png)
+![overview](/screenshots/2-top-spending.png)
 
 </details>
 
@@ -29,9 +29,18 @@ Under the hood, it's a local HTTP proxy that forwards every request upstream whi
 
 <summary>Stats per hour, day, week, month and year</summary>
 
-![overview](/screenshots/3-stats.png)
+![overview](/screenshots/3-stats-per-period.png)
 
 </details>
+
+<details>
+
+<summary>Pricing configuration</summary>
+
+![overview](/screenshots/4-pricing.png)
+
+</details>
+
 
 ## Quickstart
 
