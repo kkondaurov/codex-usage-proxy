@@ -1,17 +1,17 @@
 # Repository Guidelines
 
-This repository hosts a Rust-based local proxy and TUI that tracks OpenAI / Codex usage. Treat it as a normal Cargo project.
+This repository hosts a Rust-based local TUI that tracks OpenAI / Codex usage. Treat it as a normal Cargo project.
 
 ## Project Structure & Module Organization
 
-- Application code lives in `src/`. Prefer small focused modules (e.g. `src/proxy/`, `src/tui/`, `src/config/`, `src/storage/`).
+- Application code lives in `src/`. Prefer small focused modules (e.g. `src/ingest.rs`, `src/tui.rs`, `src/config.rs`, `src/storage.rs`).
 - Tests live next to code (`mod tests` in the same file) or in `tests/` for integration tests.
 - Configuration and example files (e.g. `codex-usage.toml`) belong at the repository root.
 
 ## Build, Test, and Development Commands
 
 - `cargo build` – Compile the project.
-- `cargo run` – Run the main binary (the proxy + TUI).
+- `cargo run` – Run the main binary (ingestor + TUI).
 - `cargo test` – Run the full test suite.
 - Use `RUST_LOG=debug cargo run` when debugging behavior.
 
@@ -32,7 +32,7 @@ This repository hosts a Rust-based local proxy and TUI that tracks OpenAI / Code
 ## Commit & Pull Request Guidelines
 
 - Use clear, imperative commit messages: `Add daily aggregate storage`, `Fix TUI refresh bug`.
-- Reference `bd` issue IDs in commits or PR descriptions when possible (e.g. `codex-usage-proxy-0j1`).
+- Reference `bd` issue IDs in commits or PR descriptions when possible (e.g. `codex-usage-tracker-0j1`).
 - PRs should describe the change, mention user-visible behavior, and note any new config or migrations.
 - Escalate the permissions to do the commit, never attempt to do create or delete git lock file.
 - Only commit if and when explicitly instructed by the user.
@@ -41,4 +41,3 @@ This repository hosts a Rust-based local proxy and TUI that tracks OpenAI / Code
 
 - Never log API keys or full request/response bodies by default; log only metadata needed for usage tracking.
 - Keep pricing and other secrets in config files or environment variables, not hard-coded into logic.
-

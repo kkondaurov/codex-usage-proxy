@@ -1,4 +1,4 @@
-/// Token-related helper functions used across the proxy.
+/// Token-related helper functions used across the tracker.
 pub fn blended_total(prompt_tokens: u64, cached_prompt_tokens: u64, completion_tokens: u64) -> u64 {
     let cached = cached_prompt_tokens.min(prompt_tokens);
     prompt_tokens.saturating_sub(cached) + completion_tokens

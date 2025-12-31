@@ -14,3 +14,6 @@ codex-usage.toml
 # Misc editor / OS files
 .DS_Store
 .env
+
+.ckignore
+.ck/

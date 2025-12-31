@@ -1,10 +1,10 @@
-# Codex Usage Proxy
+# Codex Usage Tracker
 
 When using `codex-cli` with an OpenAI API key, there's no access to usage/spend data.
 
-`codex-usage-proxy` is built to monitor `codex-cli` spend in real time in terminal UI.
+`codex-usage-tracker` monitors Codex usage in real time by reading the JSONL session logs that Codex writes under `~/.codex/sessions`.
 
-Under the hood, it's a local HTTP proxy that forwards every request upstream while recording metered usage in SQLite.
+Under the hood, it tails session files as they are updated and aggregates token usage + costs in SQLite for a live terminal UI.
 
 :warning: **HIGHLY EXPERIMENTAL! NO GUARANTEES OF ACCURACY OR STABILITY! USE AT YOUR OWN RISK!**
 
@@ -13,7 +13,7 @@ Under the hood, it's a local HTTP proxy that forwards every request upstream whi
 
 <summary>Last conversations with cost breakdown</summary>
 
-![overview](/screenshots/1-overview-last-convos.png)
+![overview](/screenshots/1-overview-last-convos-v2.png)
 
 </details>
 
@@ -21,7 +21,7 @@ Under the hood, it's a local HTTP proxy that forwards every request upstream whi
 
 <summary>Top conversations by cost per day, week, month, and all time</summary>
 
-![overview](/screenshots/2-top-spending.png)
+![overview](/screenshots/2-top-spending-v2.png)
 
 </details>
 
@@ -29,7 +29,7 @@ Under the hood, it's a local HTTP proxy that forwards every request upstream whi
 
 <summary>Stats per hour, day, week, month and year</summary>
 
-![overview](/screenshots/3-stats-per-period.png)
+![overview](/screenshots/3-stats-per-period-v2.png)
 
 </details>
 
@@ -37,7 +37,7 @@ Under the hood, it's a local HTTP proxy that forwards every request upstream whi
 
 <summary>Pricing configuration</summary>
 
-![overview](/screenshots/4-pricing.png)
+![overview](/screenshots/4-pricing-v2.png)
 
 </details>
 
@@ -55,16 +55,12 @@ Copy the config:
 cp codex-usage.example.toml codex-usage.toml
 ```
 
-Build and start the proxy:
+Build and start the tracker:
 
 ```
 cargo run --release
 ```
 
-Run `codex` via the proxy:
-
-```
-OPENAI_BASE_URL="http://127.0.0.1:8787/v1" codex
-```
+Run `codex` normally. The tracker will pick up session logs from `~/.codex/sessions` as they are written.
 
 Pricing is seeded from `codex-usage.toml` on first run (effective_from = today). Use the Pricing tab (`4`) in the TUI to add/update prices and backfill historical effective dates.

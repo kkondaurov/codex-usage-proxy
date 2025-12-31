@@ -1,56 +1,54 @@
-# Codex Usage Proxy Architecture
+# Codex Usage Tracker Architecture
 
 ## Overview
 
-`codex-usage-proxy` is a single Rust binary that runs two major subsystems on the same Tokio runtime:
+`codex-usage-tracker` is a single Rust binary that runs two major subsystems on the same Tokio runtime:
 
-1. **HTTP Proxy** – Listens on `127.0.0.1:<port>` (default 8787), mirrors OpenAI’s REST interface, and forwards every request to `https://api.openai.com`. Responses stream back to the caller unchanged, but the proxy inspects the final JSON chunk to emit `UsageEvent`s.
-2. **Terminal UI (TUI)** – Renders live usage stats in the terminal: rolling daily/weekly/monthly totals plus a table of the most recent requests. It subscribes to the event stream produced by the proxy.
+1. **Session Ingestor** – Watches the Codex session logs under `~/.codex/sessions/**/**/*.jsonl`, tails new lines, and extracts token usage deltas from `token_count` events.
+2. **Terminal UI (TUI)** – Renders live usage stats in the terminal: rolling daily/weekly/monthly totals plus a table of the most recent sessions.
 
-Both subsystems communicate through asynchronous channels and share a lightweight storage/aggregation layer for persistence.
+Both subsystems share a lightweight storage layer for persistence and cost calculation.
 
 ## Components
 
-- **Proxy Server (`src/proxy/`)**
-  - Built with `axum` + `hyper` on Tokio.
-  - Accepts any `/v1/*` method, forwards headers/bodies (including streaming).
-  - Measures latency and extracts `{model, usage.prompt_tokens, usage.completion_tokens, usage.total_tokens}` when available.
-  - Emits a `UsageEvent` via `tokio::mpsc` without logging payload contents.
-
-- **Usage Aggregator (`src/usage/`)**
-  - Consumes events, persists token usage, and produces derived metrics.
-  - Maintains:
-    - Per-day per-model counters persisted in SQLite via `sqlx` (table `daily_stats`).
-  - Exposes helper queries for “today / this week / this month / trailing 12 months”; costs are computed at query time by joining with the `prices` table.
-
-- **Configuration Layer (`src/config/`)**
-  - Loads `codex-usage.toml` from the working directory (override via `--config`).
-  - Fields: listen address, upstream base URL, SQLite path, default pricing, per-model overrides.
-  - Environment variables (`CODEX_USAGE_UPSTREAM_BASE_URL`, `CODEX_USAGE_LISTEN_ADDR`, `OPENAI_API_KEY`, etc.) can override matching fields.
-
-- **Terminal UI (`src/tui/`)**
-  - Implemented with `ratatui` + `crossterm`.
-  - Layout: top summary block (day/week/month/12m totals) and bottom scrollable table of recent events.
-  - Reacts to channel updates and redraws at ~10 FPS or on input. Supports keyboard shortcuts (`q` quit, arrow keys / `j` `k` scroll).
+- **Session Ingestor (`src/ingest.rs`)**
+  - Scans the session log tree and processes appended JSONL events.
+  - Tracks per-file offsets and last-seen totals in SQLite (`ingest_state`).
+  - Extracts per-turn token deltas from `token_count.info.total_token_usage`, attributing them to the current `turn_context.model`.
+  - Updates session metadata (title, last summary, repo info) as it appears.
 
 - **Storage (`src/storage/`)**
   - Wraps SQLite (default file `usage.db` beside the binary).
-  - Stores raw usage in `event_log`, daily aggregates in `daily_stats`, and pricing rules in `prices` (model prefix + `effective_from`).
-  - Cost is computed at read time via SQL joins; missing prices surface as `unknown` in the UI.
+  - Core tables:
+    - `sessions` – session metadata and lifetime token totals.
+    - `session_turns` – per-turn token deltas (model-specific) with timestamps.
+    - `session_daily_stats` – per-day per-session per-model aggregates.
+    - `daily_stats` – per-day per-model aggregates.
+    - `prices` – pricing rules (model prefix + effective date).
+    - `ingest_state` – file offsets and last-seen totals for incremental parsing.
+  - Costs are computed at read time via SQL joins; missing prices surface as `unknown` in the UI.
+
+- **Configuration Layer (`src/config/`)**
+  - Loads `codex-usage.toml` from the working directory (override via `--config`).
+  - Fields: session log root, polling interval, SQLite path, display settings, pricing.
+  - Environment variables can override matching fields.
+
+- **Terminal UI (`src/tui/`)**
+  - Implemented with `ratatui` + `crossterm`.
+  - Layout: top summary block (last 10m / last hour / today) and bottom scrollable table of recent sessions.
+  - Top Spending view ranks sessions by cost in the selected time window.
+  - Stats view shows hourly/daily/weekly/monthly/yearly aggregates.
+  - Pricing view allows adding/updating prices.
 
 ## Data Flow
 
-1. Codex CLI is pointed at the proxy via `OPENAI_BASE_URL=http://127.0.0.1:8787/v1`.
-2. The HTTP proxy forwards each request to OpenAI, streaming data both ways.
-3. When the upstream response completes, the proxy parses JSON (skipping bodies for streaming partials) and emits a `UsageEvent`.
-4. The Aggregator:
-   - Persists usage metadata in `event_log`.
-   - Updates daily aggregates through SQLite `INSERT ... ON CONFLICT`.
-5. The TUI queries SQLite for live totals and recent events, joining against the `prices` table to compute cost on the fly.
+1. Codex CLI writes JSONL session logs under `~/.codex/sessions/YYYY/MM/DD/`.
+2. The ingestor tails new lines and extracts token deltas from `token_count` events.
+3. Per-turn usage is stored in SQLite, along with session metadata and daily aggregates.
+4. The TUI queries SQLite for live totals and renders updated views.
 
 ## Security & Privacy Notes
 
-- The proxy never stores API keys; it forwards `Authorization` headers verbatim.
-- Request/response bodies are not persisted; only metadata (model, token counts) is stored. Costs are derived at read time.
-- Debug logging is opt-in via `RUST_LOG`; production defaults are quiet.
-- Full body logging is opt-in via `CODEX_USAGE_LOG_FILE` (newline-delimited JSON of requests/responses). Headers `authorization`, `proxy-authorization`, `x-api-key`, `api-key`, `cookie`, `set-cookie` are redacted; bodies are recorded as UTF-8 or base64. The logger uses a bounded queue; overflow drops entries with a warning. Treat this as a local debugging aid, not production/audit logging.
+- No API keys are stored; the ingestor only reads local session logs.
+- Request/response bodies are not persisted; only metadata (model, token counts) is stored.
+- Debug logging is opt-in via `RUST_LOG`.

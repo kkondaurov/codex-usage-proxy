@@ -1,8 +1,8 @@
 use crate::{
     config::AppConfig,
-    proxy,
+    ingest,
     storage::{NewPrice, Storage},
-    tui, usage,
+    tui,
 };
 use anyhow::Result;
 use chrono::Utc;
@@ -41,17 +41,12 @@ impl App {
             .collect();
         storage.seed_prices_if_empty(&prices).await?;
 
-        let (aggregator_handle, usage_tx) =
-            usage::spawn_aggregator(storage.clone(), self.config.display.recent_events_capacity);
-
-        let proxy_handle = proxy::spawn(self.config.clone(), usage_tx.clone()).await?;
+        let ingest_handle = ingest::spawn(self.config.clone(), storage.clone()).await?;
 
         tracing::info!("Launching interactive TUI (requires an attached terminal)");
         tui::run(self.config.clone(), storage.clone()).await?;
 
-        drop(usage_tx);
-        aggregator_handle.shutdown().await;
-        proxy_handle.shutdown().await?;
+        ingest_handle.shutdown().await?;
         Ok(())
     }
 }

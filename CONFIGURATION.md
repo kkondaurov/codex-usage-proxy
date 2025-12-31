@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This document defines the local configuration format for `codex-usage-proxy`, including where the config lives, how each key behaves, and the initial pricing seeds used to populate the local prices table.
+This document defines the local configuration format for `codex-usage-tracker`, including where the config lives, how each key behaves, and the initial pricing seeds used to populate the local prices table.
 
 ## File Locations
 
@@ -11,11 +11,6 @@ This document defines the local configuration format for `codex-usage-proxy`, in
 ## Top-Level Table Layout
 
 ```toml
-[server]
-listen_addr = "127.0.0.1:8787"
-public_base_path = "/v1"
-upstream_base_url = "https://api.openai.com/v1"
-
 [storage]
 database_path = "usage.db"
 flush_interval_secs = 5
@@ -23,6 +18,11 @@ flush_interval_secs = 5
 [display]
 recent_events_capacity = 500
 refresh_hz = 10
+
+[sessions]
+# root_dir defaults to ~/.codex/sessions if omitted.
+root_dir = "/Users/you/.codex/sessions"
+poll_interval_secs = 2
 
 [pricing]
 currency = "USD"
@@ -40,9 +40,9 @@ completion_per_1m = 8.0
 
 | Section | Purpose | Notes |
 | --- | --- | --- |
-| `[server]` | Proxy listener + upstream target | `public_base_path` should match what Codex expects (`/v1`). |
 | `[storage]` | SQLite file location and sync settings | `flush_interval_secs` controls how often aggregates are forced to disk. |
 | `[display]` | TUI presentation knobs | Increase `recent_events_capacity` if you want a longer history in the table. |
+| `[sessions]` | Session log ingestion | `root_dir` points at Codex session logs; `poll_interval_secs` controls scan cadence. |
 | `[pricing]` | Currency + seed prices | Seeds are written into the `prices` table on first run (effective_from = today). Currency is informational only. Prices are expressed per 1M tokens. |
 | `[pricing.models."<model>"]` | Model-specific prices | Model names must match the `model` string returned by the API; quote names containing dots. |
 
@@ -52,12 +52,9 @@ Environment overrides:
 
 | Env var | Overrides |
 | --- | --- |
-| `CODEX_USAGE_UPSTREAM_BASE_URL` | `[server].upstream_base_url` |
-| `CODEX_USAGE_LISTEN_ADDR` | `[server].listen_addr` |
 | `CODEX_USAGE_DB_PATH` | `[storage].database_path` |
-| `CODEX_USAGE_LOG_FILE` | Enables request/response body logging to the given file path (JSON lines). **Use for debugging only**: bodies are persisted (UTF-8 or base64), only selected headers are redacted (auth/api-key/cookie), and the bounded log queue may drop entries under load (WARN emitted). |
-
-`CODEX_USAGE_UPSTREAM_BASE_URL` intentionally differs from Codex CLI’s own `OPENAI_BASE_URL`. Set the former to the real upstream (usually `https://api.openai.com/v1`) so you can still point Codex at the proxy via `OPENAI_BASE_URL=http://127.0.0.1:8787/v1` without confusing the proxy about its upstream target.
+| `CODEX_USAGE_SESSIONS_DIR` | `[sessions].root_dir` |
+| `CODEX_USAGE_SESSIONS_POLL_INTERVAL_SECS` | `[sessions].poll_interval_secs` |
 
 ## Default Pricing Table (USD per 1M tokens)
 

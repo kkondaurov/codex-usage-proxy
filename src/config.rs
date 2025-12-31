@@ -11,11 +11,11 @@ use std::{
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
-    pub server: ServerConfig,
-    #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
     pub display: DisplayConfig,
+    #[serde(default)]
+    pub sessions: SessionsConfig,
     #[serde(default)]
     pub pricing: PricingConfig,
 }
@@ -23,9 +23,9 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            server: ServerConfig::default(),
             storage: StorageConfig::default(),
             display: DisplayConfig::default(),
+            sessions: SessionsConfig::default(),
             pricing: PricingConfig::default(),
         }
     }
@@ -57,40 +57,16 @@ impl AppConfig {
     }
 
     fn apply_env_overrides(&mut self) {
-        if let Ok(addr) = env::var("CODEX_USAGE_LISTEN_ADDR") {
-            self.server.listen_addr = addr;
-        }
-        if let Ok(base_url) = env::var("CODEX_USAGE_UPSTREAM_BASE_URL") {
-            self.server.upstream_base_url = base_url;
-        }
         if let Ok(db_path) = env::var("CODEX_USAGE_DB_PATH") {
             self.storage.database_path = PathBuf::from(db_path);
         }
-        if let Ok(log_path) = env::var("CODEX_USAGE_LOG_FILE") {
-            self.server.request_log_path = Some(PathBuf::from(log_path));
+        if let Ok(sessions_dir) = env::var("CODEX_USAGE_SESSIONS_DIR") {
+            self.sessions.root_dir = PathBuf::from(sessions_dir);
         }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ServerConfig {
-    #[serde(default = "default_listen_addr")]
-    pub listen_addr: String,
-    #[serde(default = "default_public_base_path")]
-    pub public_base_path: String,
-    #[serde(default = "default_upstream_base_url")]
-    pub upstream_base_url: String,
-    #[serde(default)]
-    pub request_log_path: Option<PathBuf>,
-}
-
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            listen_addr: default_listen_addr(),
-            public_base_path: default_public_base_path(),
-            upstream_base_url: default_upstream_base_url(),
-            request_log_path: None,
+        if let Ok(poll_interval) = env::var("CODEX_USAGE_SESSIONS_POLL_INTERVAL_SECS") {
+            if let Ok(value) = poll_interval.parse::<u64>() {
+                self.sessions.poll_interval_secs = value;
+            }
         }
     }
 }
@@ -125,6 +101,23 @@ impl Default for DisplayConfig {
         Self {
             recent_events_capacity: default_recent_capacity(),
             refresh_hz: default_refresh_hz(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionsConfig {
+    #[serde(default = "default_sessions_root")]
+    pub root_dir: PathBuf,
+    #[serde(default = "default_sessions_poll_interval")]
+    pub poll_interval_secs: u64,
+}
+
+impl Default for SessionsConfig {
+    fn default() -> Self {
+        Self {
+            root_dir: default_sessions_root(),
+            poll_interval_secs: default_sessions_poll_interval(),
         }
     }
 }
@@ -197,18 +190,6 @@ impl From<ModelPricingInput> for ModelPricing {
     }
 }
 
-fn default_listen_addr() -> String {
-    "127.0.0.1:8787".to_string()
-}
-
-fn default_public_base_path() -> String {
-    "/v1".to_string()
-}
-
-fn default_upstream_base_url() -> String {
-    "https://api.openai.com/v1".to_string()
-}
-
 fn default_database_path() -> PathBuf {
     PathBuf::from("usage.db")
 }
@@ -223,6 +204,18 @@ fn default_recent_capacity() -> usize {
 
 fn default_refresh_hz() -> u64 {
     10
+}
+
+fn default_sessions_root() -> PathBuf {
+    if let Ok(home) = env::var("HOME") {
+        PathBuf::from(home).join(".codex/sessions")
+    } else {
+        PathBuf::from(".codex/sessions")
+    }
+}
+
+fn default_sessions_poll_interval() -> u64 {
+    2
 }
 
 fn default_currency() -> String {
@@ -341,16 +334,10 @@ mod tests {
     #[test]
     fn load_from_file_applies_overrides() {
         let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        let _listen_guard = EnvGuard::unset("CODEX_USAGE_LISTEN_ADDR");
         let _db_guard = EnvGuard::unset("CODEX_USAGE_DB_PATH");
-        let _base_guard = EnvGuard::unset("CODEX_USAGE_UPSTREAM_BASE_URL");
 
         let file = NamedTempFile::new().unwrap();
         let toml = r#"
-            [server]
-            listen_addr = "0.0.0.0:9999"
-            upstream_base_url = "https://example.com/v9"
-
             [storage]
             database_path = "custom.db"
 
@@ -364,7 +351,6 @@ mod tests {
         fs::write(file.path(), toml).unwrap();
 
         let config = AppConfig::load(Some(file.path())).unwrap();
-        assert_eq!(config.server.listen_addr, "0.0.0.0:9999");
         assert_eq!(config.storage.database_path, PathBuf::from("custom.db"));
         assert_eq!(config.display.recent_events_capacity, 77);
         let pricing = config.pricing.models.get("test").unwrap();
@@ -375,38 +361,12 @@ mod tests {
     #[test]
     fn env_overrides_take_precedence() {
         let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-        let _listen_guard = EnvGuard::set("CODEX_USAGE_LISTEN_ADDR", "127.0.0.1:7000");
         let _db_guard = EnvGuard::set("CODEX_USAGE_DB_PATH", "/tmp/codex-test.db");
-        let _base_guard = EnvGuard::set(
-            "CODEX_USAGE_UPSTREAM_BASE_URL",
-            "https://proxy.example.com/v3",
-        );
-        let _log_guard = EnvGuard::set("CODEX_USAGE_LOG_FILE", "/tmp/proxy-log.jsonl");
 
-        let file = NamedTempFile::new().unwrap();
-        fs::write(
-            file.path(),
-            r#"
-            [server]
-            listen_addr = "0.0.0.0:1"
-            upstream_base_url = "https://example.com"
-            "#,
-        )
-        .unwrap();
-
-        let config = AppConfig::load(Some(file.path())).unwrap();
-        assert_eq!(config.server.listen_addr, "127.0.0.1:7000");
+        let config = AppConfig::load(None).unwrap();
         assert_eq!(
             config.storage.database_path,
             PathBuf::from("/tmp/codex-test.db")
-        );
-        assert_eq!(
-            config.server.upstream_base_url,
-            "https://proxy.example.com/v3"
-        );
-        assert_eq!(
-            config.server.request_log_path,
-            Some(PathBuf::from("/tmp/proxy-log.jsonl"))
         );
     }
 
