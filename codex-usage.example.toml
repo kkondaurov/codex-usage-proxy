@@ -15,6 +15,11 @@ currency = "USD"
 # Pricing entries seed the local prices table on first run (effective_from = today).
 # Rates are expressed as USD per 1M tokens.
 
+[alerts]
+# Optional budget thresholds for visual warnings.
+# daily_budget_usd = 50.0
+# monthly_budget_usd = 500.0
+
 [pricing.models."gpt-4.1"]
 prompt_per_1m = 2.0
 cached_prompt_per_1m = 0.5

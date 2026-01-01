@@ -13,13 +13,9 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::{
-    sync::oneshot,
-    task::JoinHandle,
-    time,
-};
+use tokio::{sync::oneshot, task::JoinHandle, time};
 
-const TITLE_MAX_CHARS: usize = 100;
+const TITLE_MAX_CHARS: usize = 200;
 const SUMMARY_MAX_CHARS: usize = 160;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -219,7 +215,11 @@ impl SessionIngestor {
         for state in states {
             files.insert(state.path.clone(), FileState::from_state(&state));
         }
-        Ok(Self { root, storage, files })
+        Ok(Self {
+            root,
+            storage,
+            files,
+        })
     }
 
     async fn scan_once(&mut self) -> Result<()> {
@@ -247,10 +247,7 @@ impl SessionIngestor {
             }
         };
         let len = metadata.len();
-        let mut state = self
-            .files
-            .remove(path)
-            .unwrap_or_else(FileState::new);
+        let mut state = self.files.remove(path).unwrap_or_else(FileState::new);
 
         if len == state.last_offset {
             self.files.insert(path.to_path_buf(), state);
@@ -379,12 +376,14 @@ async fn process_event(storage: &Storage, state: &mut FileState, value: &Value) 
                                         apply_title(storage, state, &title).await?;
                                     }
                                 } else if role.eq_ignore_ascii_case("assistant") {
-                                    if let Some(summary) = format_snippet(&text, SUMMARY_MAX_CHARS) {
+                                    if let Some(summary) = format_snippet(&text, SUMMARY_MAX_CHARS)
+                                    {
                                         apply_summary(storage, state, &summary, timestamp).await?;
                                     }
                                     if let Some(note) = format_snippet(&text, SUMMARY_MAX_CHARS) {
                                         state.pending_note = Some(note);
-                                        state.pending_note_seq = state.pending_note_seq.saturating_add(1);
+                                        state.pending_note_seq =
+                                            state.pending_note_seq.saturating_add(1);
                                     }
                                 }
                             }
@@ -470,7 +469,11 @@ async fn handle_token_count(
     let context_window = info
         .get("model_context_window")
         .and_then(|v| v.as_u64())
-        .or_else(|| info.get("model_context_window").and_then(|v| v.as_i64()).map(|v| v as u64));
+        .or_else(|| {
+            info.get("model_context_window")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as u64)
+        });
     let totals_value = info.get("total_token_usage");
     let Some(totals_value) = totals_value else {
         return Ok(());
@@ -666,11 +669,7 @@ fn extract_message_text(payload: &Value) -> Option<String> {
                 }
             }
         }
-        if acc.is_empty() {
-            None
-        } else {
-            Some(acc)
-        }
+        if acc.is_empty() { None } else { Some(acc) }
     } else if let Some(text) = content.as_str() {
         Some(text.to_string())
     } else {
@@ -705,7 +704,11 @@ fn format_snippet(text: &str, max_chars: usize) -> Option<String> {
         truncated.push(ch);
     }
     let trimmed = truncated.trim_end().to_string();
-    let mut result = if trimmed.is_empty() { truncated } else { trimmed };
+    let mut result = if trimmed.is_empty() {
+        truncated
+    } else {
+        trimmed
+    };
     result.push('…');
     Some(result)
 }

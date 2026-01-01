@@ -28,6 +28,11 @@ poll_interval_secs = 2
 currency = "USD"
 # Model prices seed the local `prices` table on first run (effective_from = today).
 
+[alerts]
+# Optional budget thresholds (USD) for visual warnings.
+# daily_budget_usd = 50.0
+# monthly_budget_usd = 500.0
+
 [pricing.models.gpt-4.1]
 prompt_per_1m = 2.0
 cached_prompt_per_1m = 0.5
@@ -44,6 +49,7 @@ completion_per_1m = 8.0
 | `[display]` | TUI presentation knobs | Increase `recent_events_capacity` if you want a longer history in the table. |
 | `[sessions]` | Session log ingestion | `root_dir` points at Codex session logs; `poll_interval_secs` controls scan cadence. |
 | `[pricing]` | Currency + seed prices | Seeds are written into the `prices` table on first run (effective_from = today). Currency is informational only. Prices are expressed per 1M tokens. |
+| `[alerts]` | Optional budget thresholds | `daily_budget_usd` and `monthly_budget_usd` drive warning highlights in the UI when exceeded. |
 | `[pricing.models."<model>"]` | Model-specific prices | Model names must match the `model` string returned by the API; quote names containing dots. |
 
 Legacy fields `default_prompt_per_1k` and `default_completion_per_1k` are ignored (kept only for backward compatibility with older configs). New configs should use `default_prompt_per_1m` / `default_completion_per_1m` if needed.

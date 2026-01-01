@@ -18,6 +18,8 @@ pub struct AppConfig {
     pub sessions: SessionsConfig,
     #[serde(default)]
     pub pricing: PricingConfig,
+    #[serde(default)]
+    pub alerts: AlertConfig,
 }
 
 impl Default for AppConfig {
@@ -27,6 +29,7 @@ impl Default for AppConfig {
             display: DisplayConfig::default(),
             sessions: SessionsConfig::default(),
             pricing: PricingConfig::default(),
+            alerts: AlertConfig::default(),
         }
     }
 }
@@ -149,6 +152,23 @@ impl Default for PricingConfig {
 }
 
 impl PricingConfig {}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AlertConfig {
+    #[serde(default)]
+    pub daily_budget_usd: Option<f64>,
+    #[serde(default)]
+    pub monthly_budget_usd: Option<f64>,
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            daily_budget_usd: None,
+            monthly_budget_usd: None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(from = "ModelPricingInput")]

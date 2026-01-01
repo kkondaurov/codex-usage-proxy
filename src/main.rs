@@ -1,10 +1,10 @@
 mod app;
 mod cli;
 mod config;
+mod ingest;
 mod storage;
 mod tokens;
 mod tui;
-mod ingest;
 
 use anyhow::Result;
 use clap::Parser;

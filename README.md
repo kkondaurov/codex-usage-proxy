@@ -11,17 +11,27 @@ Under the hood, it tails session files as they are updated and aggregates token 
 ## Screenshots
 <details>
 
-<summary>Last conversations with cost breakdown</summary>
+<summary>Overview and last sessions</summary>
 
-![overview](/screenshots/1-overview-last-convos-v2.png)
+![overview](/screenshots/1-overview-last-convos-v3.png)
 
 </details>
+
+
+<details>
+
+<summary>Session details</summary>
+
+![overview](/screenshots/2-overview-session-details-v3.png)
+
+</details>
+
 
 <details>
 
 <summary>Top conversations by cost per day, week, month, and all time</summary>
 
-![overview](/screenshots/2-top-spending-v2.png)
+![overview](/screenshots/3-top-spending-v3.png)
 
 </details>
 
@@ -29,7 +39,7 @@ Under the hood, it tails session files as they are updated and aggregates token 
 
 <summary>Stats per hour, day, week, month and year</summary>
 
-![overview](/screenshots/3-stats-per-period-v2.png)
+![overview](/screenshots/4-stats-per-period-v3.png)
 
 </details>
 
@@ -37,7 +47,7 @@ Under the hood, it tails session files as they are updated and aggregates token 
 
 <summary>Pricing configuration</summary>
 
-![overview](/screenshots/4-pricing-v2.png)
+![overview](/screenshots/5-pricing-v3.png)
 
 </details>
 
