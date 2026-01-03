@@ -55,6 +55,7 @@ const HEATMAP_COLORS: [Color; 7] = [
     Color::Rgb(130, 205, 145),
     Color::Rgb(155, 230, 170),
 ];
+const FUTURE_HEATMAP_COLOR: Color = Color::Rgb(22, 22, 22);
 const STREAK_COLORS: [Color; 7] = [
     Color::Rgb(35, 35, 35),
     Color::Rgb(60, 90, 140),
@@ -1166,7 +1167,7 @@ fn overview_cluster_lines(
 }
 
 fn render_wrapped_heatmap(frame: &mut Frame, area: Rect, stats: &WrappedStats, theme: &UiTheme) {
-    let weeks = heatmap_weeks_for_year(stats.year, stats.end_date);
+    let weeks = heatmap_weeks_for_year(stats.year);
     let max_tokens = stats.daily_tokens.values().copied().max().unwrap_or(0);
     if weeks.is_empty() {
         let paragraph = Paragraph::new("No activity yet.")
@@ -1178,7 +1179,10 @@ fn render_wrapped_heatmap(frame: &mut Frame, area: Rect, stats: &WrappedStats, t
 
     let weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     let mut lines = Vec::with_capacity(9);
-    lines.push(heatmap_month_line(&weeks, theme));
+    lines.push(heatmap_month_line(&weeks, theme, stats.year));
+    let start_date = NaiveDate::from_ymd_opt(stats.year, 1, 1).unwrap_or(stats.end_date);
+    let last_day = NaiveDate::from_ymd_opt(stats.year, 12, 31).unwrap_or(stats.end_date);
+    let is_current_year = stats.end_date < last_day;
     for (row_idx, label) in weekday_labels.iter().enumerate() {
         let mut spans = vec![Span::styled(
             format!("{label} "),
@@ -1193,15 +1197,22 @@ fn render_wrapped_heatmap(frame: &mut Frame, area: Rect, stats: &WrappedStats, t
                 .and_then(|d| stats.daily_tokens.get(&d).copied())
                 .unwrap_or(0);
             let intensity = heatmap_intensity(count, max_tokens);
-            let palette = if date
-                .map(|d| stats.max_streak_days.contains(&d))
-                .unwrap_or(false)
-            {
-                STREAK_COLORS
+            let color = if let Some(day) = date {
+                if day < start_date {
+                    HEATMAP_COLORS[0]
+                } else if day > stats.end_date && is_current_year {
+                    FUTURE_HEATMAP_COLOR
+                } else {
+                    let palette = if stats.max_streak_days.contains(&day) {
+                        STREAK_COLORS
+                    } else {
+                        HEATMAP_COLORS
+                    };
+                    palette[intensity]
+                }
             } else {
-                HEATMAP_COLORS
+                HEATMAP_COLORS[0]
             };
-            let color = palette[intensity];
             spans.push(Span::styled("  ".to_string(), Style::default().bg(color)));
         }
         lines.push(Line::from(spans));
@@ -1217,7 +1228,7 @@ fn render_wrapped_heatmap(frame: &mut Frame, area: Rect, stats: &WrappedStats, t
     frame.render_widget(paragraph, area);
 }
 
-fn heatmap_month_line(weeks: &[[Option<NaiveDate>; 7]], theme: &UiTheme) -> Line<'static> {
+fn heatmap_month_line(weeks: &[[Option<NaiveDate>; 7]], theme: &UiTheme, year: i32) -> Line<'static> {
     if weeks.is_empty() {
         return Line::from("");
     }
@@ -1227,7 +1238,7 @@ fn heatmap_month_line(weeks: &[[Option<NaiveDate>; 7]], theme: &UiTheme) -> Line
         let month = week
             .iter()
             .flatten()
-            .find(|date| date.day() == 1)
+            .find(|date| date.year() == year && date.day() == 1)
             .map(|date| date.month());
         if let Some(month) = month {
             let label = month_abbrev(month);
@@ -4300,39 +4311,34 @@ fn streak_stats_for_year(
     (max_streak, current_streak, max_streak_days)
 }
 
-fn heatmap_weeks_for_year(year: i32, end_date: NaiveDate) -> Vec<[Option<NaiveDate>; 7]> {
-    let start_date = NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(end_date);
+fn heatmap_weeks_for_year(year: i32) -> Vec<[Option<NaiveDate>; 7]> {
+    let start_date = NaiveDate::from_ymd_opt(year, 1, 1)
+        .unwrap_or_else(|| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
+    let end_date = NaiveDate::from_ymd_opt(year, 12, 31).unwrap_or(start_date);
     let start_offset = start_date.weekday().num_days_from_monday() as i64;
     let mut cursor = start_date
         .checked_sub_signed(ChronoDuration::days(start_offset))
         .unwrap_or(start_date);
+    let end_offset = 6 - end_date.weekday().num_days_from_monday() as i64;
+    let end_cursor = end_date
+        .checked_add_signed(ChronoDuration::days(end_offset))
+        .unwrap_or(end_date);
     let mut weeks = Vec::new();
     let mut week = [None; 7];
 
     loop {
         let weekday_idx = cursor.weekday().num_days_from_monday() as usize;
-        if cursor.year() == year && cursor <= end_date {
-            week[weekday_idx] = Some(cursor);
-        }
+        week[weekday_idx] = Some(cursor);
         if weekday_idx == 6 {
-            if week.iter().any(|day| day.is_some()) {
-                weeks.push(week);
-            }
+            weeks.push(week);
             week = [None; 7];
-            if cursor >= end_date {
+            if cursor >= end_cursor {
                 break;
             }
         }
         cursor = cursor
             .checked_add_signed(ChronoDuration::days(1))
             .unwrap_or(cursor);
-        if cursor.year() > year + 1 {
-            break;
-        }
-    }
-
-    if week.iter().any(|day| day.is_some()) {
-        weeks.push(week);
     }
 
     weeks
