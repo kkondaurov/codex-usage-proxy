@@ -319,7 +319,7 @@ async fn process_event(storage: &Storage, state: &mut FileState, value: &Value) 
         "turn_context" => {
             if let Some(payload) = value.get("payload") {
                 if let Some(model) = payload.get("model").and_then(|m| m.as_str()) {
-                    state.current_model = Some(model.to_string());
+                    state.current_model = Some(normalize_model_id(model));
                 }
                 state.current_effort = payload
                     .get("effort")
@@ -711,6 +711,17 @@ fn format_snippet(text: &str, max_chars: usize) -> Option<String> {
     };
     result.push('…');
     Some(result)
+}
+
+fn normalize_model_id(model: &str) -> String {
+    let trimmed = model.trim();
+    if let Some(rest) = trimmed.strip_prefix("openai/") {
+        rest.trim().to_string()
+    } else if let Some(rest) = trimmed.strip_prefix("openai.") {
+        rest.trim().to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn filter_title_candidate(text: &str) -> Option<String> {

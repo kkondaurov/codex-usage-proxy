@@ -12,70 +12,14 @@ poll_interval_secs = 2
 
 [pricing]
 currency = "USD"
-# Pricing entries seed the local prices table on first run (effective_from = today).
-# Rates are expressed as USD per 1M tokens.
+# Prices are fetched from the remote dataset and refreshed periodically.
+
+[pricing.remote]
+url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+refresh_interval_hours = 24
+timeout_secs = 5
 
 [alerts]
 # Optional budget thresholds for visual warnings.
 # daily_budget_usd = 50.0
 # monthly_budget_usd = 500.0
-
-[pricing.models."gpt-4.1"]
-prompt_per_1m = 2.0
-cached_prompt_per_1m = 0.5
-completion_per_1m = 8.0
-
-[pricing.models."gpt-4.1-mini"]
-prompt_per_1m = 0.4
-cached_prompt_per_1m = 0.1
-completion_per_1m = 1.6
-
-[pricing.models."gpt-4.1-nano"]
-prompt_per_1m = 0.1
-cached_prompt_per_1m = 0.025
-completion_per_1m = 0.4
-
-[pricing.models."gpt-4o-2024-08-06"]
-prompt_per_1m = 2.5
-cached_prompt_per_1m = 1.25
-completion_per_1m = 10.0
-
-[pricing.models."gpt-4o-mini-2024-07-18"]
-prompt_per_1m = 0.15
-cached_prompt_per_1m = 0.075
-completion_per_1m = 0.6
-
-[pricing.models."o4-mini"]
-prompt_per_1m = 4.0
-cached_prompt_per_1m = 1.0
-completion_per_1m = 16.0
-
-[pricing.models."gpt-5"]
-prompt_per_1m = 1.25
-cached_prompt_per_1m = 0.125
-completion_per_1m = 10.0
-
-[pricing.models."gpt-5-codex"]
-prompt_per_1m = 1.25
-cached_prompt_per_1m = 0.125
-completion_per_1m = 10.0
-
-[pricing.models."gpt-5.1-2025-11-13"]
-prompt_per_1m = 1.25
-cached_prompt_per_1m = 0.125
-completion_per_1m = 10.0
-
-[pricing.models."gpt-5.1-codex"]
-prompt_per_1m = 1.25
-cached_prompt_per_1m = 0.125
-completion_per_1m = 10.0
-
-[pricing.models."gpt-5.2"]
-prompt_per_1m = 1.75
-cached_prompt_per_1m = 0.175
-completion_per_1m = 14.0
-
-[pricing.models."gpt-5.2-2025-12-11"]
-prompt_per_1m = 1.75
-cached_prompt_per_1m = 0.175
-completion_per_1m = 14.0

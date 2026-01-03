@@ -1,11 +1,5 @@
-use crate::{
-    config::AppConfig,
-    ingest,
-    storage::{NewPrice, Storage},
-    tui,
-};
+use crate::{config::AppConfig, ingest, pricing_remote, storage::Storage, tui};
 use anyhow::Result;
-use chrono::Utc;
 use std::sync::Arc;
 
 /// High-level application orchestrator.
@@ -28,22 +22,15 @@ impl App {
             storage.truncate_usage_tables().await?;
         }
 
-        let today = Utc::now().date_naive();
-        let prices: Vec<NewPrice> = self
-            .config
-            .pricing
-            .models
-            .iter()
-            .map(|(model, pricing)| NewPrice {
-                model: model.clone(),
-                effective_from: today,
-                currency: self.config.pricing.currency.clone(),
-                prompt_per_1m: pricing.prompt_per_1m,
-                cached_prompt_per_1m: pricing.cached_prompt_per_1m,
-                completion_per_1m: pricing.completion_per_1m,
-            })
-            .collect();
-        storage.seed_prices_if_empty(&prices).await?;
+        let pricing_config = self.config.pricing.clone();
+        let pricing_storage = storage.clone();
+        tokio::spawn(async move {
+            if let Err(err) =
+                pricing_remote::sync_if_needed(&pricing_config, &pricing_storage).await
+            {
+                tracing::warn!(error = %err, "failed to sync pricing on startup");
+            }
+        });
 
         let ingest_handle = ingest::spawn(self.config.clone(), storage.clone()).await?;
 

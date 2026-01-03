@@ -24,13 +24,13 @@ Both subsystems share a lightweight storage layer for persistence and cost calcu
     - `session_turns` – per-turn token deltas (model-specific) with timestamps.
     - `session_daily_stats` – per-day per-session per-model aggregates.
     - `daily_stats` – per-day per-model aggregates.
-    - `prices` – pricing rules (model prefix + effective date).
+    - `prices` – pricing rules (model prefix + effective date) populated from the remote dataset.
     - `ingest_state` – file offsets and last-seen totals for incremental parsing.
   - Costs are computed at read time via SQL joins; missing prices surface as `unknown` in the UI.
 
 - **Configuration Layer (`src/config/`)**
   - Loads `codex-usage.toml` from the working directory (override via `--config`).
-  - Fields: session log root, polling interval, SQLite path, display settings, pricing.
+  - Fields: session log root, polling interval, SQLite path, display settings, pricing sync.
   - Environment variables can override matching fields.
 
 - **Terminal UI (`src/tui/`)**
@@ -38,7 +38,7 @@ Both subsystems share a lightweight storage layer for persistence and cost calcu
   - Layout: top summary block (last 10m / last hour / today) and bottom scrollable table of recent sessions.
   - Top Spending view ranks sessions by cost in the selected time window.
   - Stats view shows hourly/daily/weekly/monthly/yearly aggregates.
-  - Pricing view allows adding/updating prices.
+  - Pricing view shows the remote price table and sync status.
 
 ## Data Flow
 

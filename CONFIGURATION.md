@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This document defines the local configuration format for `codex-usage-tracker`, including where the config lives, how each key behaves, and the initial pricing seeds used to populate the local prices table.
+This document defines the local configuration format for `codex-usage-tracker`, including where the config lives, how each key behaves, and how pricing sync works.
 
 ## File Locations
 
@@ -26,19 +26,16 @@ poll_interval_secs = 2
 
 [pricing]
 currency = "USD"
-# Model prices seed the local `prices` table on first run (effective_from = today).
+
+[pricing.remote]
+url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+refresh_interval_hours = 24
+timeout_secs = 5
 
 [alerts]
 # Optional budget thresholds (USD) for visual warnings.
 # daily_budget_usd = 50.0
 # monthly_budget_usd = 500.0
-
-[pricing.models.gpt-4.1]
-prompt_per_1m = 2.0
-cached_prompt_per_1m = 0.5
-completion_per_1m = 8.0
-
-# ...additional model entries...
 ```
 
 ### Sections
@@ -48,11 +45,9 @@ completion_per_1m = 8.0
 | `[storage]` | SQLite file location and sync settings | `flush_interval_secs` controls how often aggregates are forced to disk. |
 | `[display]` | TUI presentation knobs | Increase `recent_events_capacity` if you want a longer history in the table. |
 | `[sessions]` | Session log ingestion | `root_dir` points at Codex session logs; `poll_interval_secs` controls scan cadence. |
-| `[pricing]` | Currency + seed prices | Seeds are written into the `prices` table on first run (effective_from = today). Currency is informational only. Prices are expressed per 1M tokens. |
+| `[pricing]` | Currency + pricing sync | Currency is informational only. Prices are fetched from the remote dataset and stored locally. |
+| `[pricing.remote]` | Remote pricing settings | `url` points at the pricing dataset, `refresh_interval_hours` controls background refresh, `timeout_secs` limits fetch time. |
 | `[alerts]` | Optional budget thresholds | `daily_budget_usd` and `monthly_budget_usd` drive warning highlights in the UI when exceeded. |
-| `[pricing.models."<model>"]` | Model-specific prices | Model names must match the `model` string returned by the API; quote names containing dots. |
-
-Legacy fields `default_prompt_per_1k` and `default_completion_per_1k` are ignored (kept only for backward compatibility with older configs). New configs should use `default_prompt_per_1m` / `default_completion_per_1m` if needed.
 
 Environment overrides:
 
@@ -62,23 +57,6 @@ Environment overrides:
 | `CODEX_USAGE_SESSIONS_DIR` | `[sessions].root_dir` |
 | `CODEX_USAGE_SESSIONS_POLL_INTERVAL_SECS` | `[sessions].poll_interval_secs` |
 
-## Default Pricing Table (USD per 1M tokens)
+## Remote Pricing
 
-The repository ships with baseline prices derived from the OpenAI pricing page (retrieved November 15 2025). On first run, these entries seed the local `prices` table with `effective_from = today` (UTC date). Costs are computed at runtime by joining usage data with the best matching price. If no price is found, the UI shows `unknown`.
-
-| Model | Prompt | Cached Prompt | Completion |
-| --- | --- | --- | --- |
-| `gpt-4.1` | $2.00 | $0.50 | $8.00 |
-| `gpt-4.1-mini` | $0.40 | $0.10 | $1.60 |
-| `gpt-4.1-nano` | $0.10 | $0.025 | $0.40 |
-| `gpt-4o-2024-08-06` | $2.50 | $1.25 | $10.00 |
-| `gpt-4o-mini-2024-07-18` | $0.15 | $0.075 | $0.60 |
-| `o4-mini` | $4.00 | $1.00 | $16.00 |
-
-All numbers represent USD per 1,000,000 tokens. If the API reports a model not in this table (or before an effective date), the UI shows `unknown` until you add a price.
-
-## Adding New Models
-
-1. Add a `[pricing.models.<model_name>]` block **before first run** to seed initial prices, or edit prices in the TUI (press `4`).
-2. Keep names identical to the API response (`model` string) to avoid mismatches (prefix matching is supported).
-3. When pricing changes, edit `CONFIGURATION.md` and `codex-usage.example.toml` for traceability, or adjust the effective date in the pricing UI.
+Pricing is pulled from the remote dataset and cached in SQLite. On each refresh, the local `prices` table is replaced with the latest dataset and applied to all historical usage. If a model is missing from the dataset, costs display as `unknown` until the next successful sync.

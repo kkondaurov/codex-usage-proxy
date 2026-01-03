@@ -39,15 +39,8 @@ SELECT
         ELSE 0
     END AS missing_price
 FROM session_turns t
-LEFT JOIN prices p
-  ON p.rowid = (
-      SELECT p2.rowid
-      FROM prices p2
-      WHERE t.model LIKE p2.model || '%'
-        AND p2.effective_from <= date(t.timestamp)
-      ORDER BY LENGTH(p2.model) DESC, p2.effective_from DESC
-      LIMIT 1
-  );
+LEFT JOIN model_prices p
+  ON p.model = t.model;
 "#;
 
 const SESSION_DAILY_COSTS_VIEW_SQL: &str = r#"
@@ -78,15 +71,8 @@ SELECT
         ELSE 0
     END AS missing_price
 FROM session_daily_stats d
-LEFT JOIN prices p
-  ON p.rowid = (
-      SELECT p2.rowid
-      FROM prices p2
-      WHERE d.model LIKE p2.model || '%'
-        AND p2.effective_from <= d.date
-      ORDER BY LENGTH(p2.model) DESC, p2.effective_from DESC
-      LIMIT 1
-  );
+LEFT JOIN model_prices p
+  ON p.model = d.model;
 "#;
 
 const DAILY_STATS_COSTS_VIEW_SQL: &str = r#"
@@ -117,15 +103,8 @@ SELECT
         ELSE 0
     END AS missing_price
 FROM daily_stats d
-LEFT JOIN prices p
-  ON p.rowid = (
-      SELECT p2.rowid
-      FROM prices p2
-      WHERE d.model LIKE p2.model || '%'
-        AND p2.effective_from <= d.date
-      ORDER BY LENGTH(p2.model) DESC, p2.effective_from DESC
-      LIMIT 1
-  );
+LEFT JOIN model_prices p
+  ON p.model = d.model;
 "#;
 
 #[derive(Clone)]
@@ -534,18 +513,18 @@ impl Storage {
     }
 
     async fn ensure_prices_schema(&self) -> Result<()> {
-        let legacy_prompt = self.table_has_column("prices", "prompt_per_1k").await?;
-        let legacy_completion = self.table_has_column("prices", "completion_per_1k").await?;
-        let legacy_cached = self
-            .table_has_column("prices", "cached_prompt_per_1k")
-            .await?;
-        let needs_reset = legacy_prompt || legacy_completion || legacy_cached;
-
-        if needs_reset {
-            sqlx::query("DROP TABLE IF EXISTS prices;")
+        let has_prompt = self
+            .table_has_column("prices", "prompt_per_1m")
+            .await
+            .unwrap_or(false);
+        let has_completion = self
+            .table_has_column("prices", "completion_per_1m")
+            .await
+            .unwrap_or(false);
+        if !has_prompt || !has_completion {
+            let _ = sqlx::query("DROP TABLE IF EXISTS prices;")
                 .execute(&*self.pool)
-                .await
-                .with_context(|| "failed to drop legacy prices table")?;
+                .await;
         }
 
         sqlx::query(
@@ -565,6 +544,43 @@ impl Storage {
         .execute(&*self.pool)
         .await
         .with_context(|| "failed to ensure prices schema")?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS model_prices (
+                model TEXT PRIMARY KEY,
+                prompt_per_1m REAL,
+                cached_prompt_per_1m REAL,
+                completion_per_1m REAL
+            );
+            "#,
+        )
+        .execute(&*self.pool)
+        .await
+        .with_context(|| "failed to ensure model_prices schema")?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_model_prices_model
+            ON model_prices(model);
+            "#,
+        )
+        .execute(&*self.pool)
+        .await
+        .with_context(|| "failed to ensure model_prices index")?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS pricing_meta (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                source_url TEXT NOT NULL,
+                last_fetch_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&*self.pool)
+        .await
+        .with_context(|| "failed to ensure pricing_meta schema")?;
 
         sqlx::query(
             r#"
@@ -632,20 +648,54 @@ impl Storage {
         Ok(false)
     }
 
-    pub async fn seed_prices_if_empty(&self, prices: &[NewPrice]) -> Result<usize> {
-        if prices.is_empty() {
-            return Ok(0);
-        }
-
-        let mut tx = self.pool.begin().await?;
-        let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM prices")
-            .fetch_one(&mut *tx)
+    pub async fn prices_count(&self) -> Result<usize> {
+        let row: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM prices")
+            .fetch_one(&*self.pool)
             .await
             .with_context(|| "failed to count price rows")?;
-        if existing > 0 {
-            tx.commit().await?;
-            return Ok(0);
-        }
+        Ok(row.max(0) as usize)
+    }
+
+    pub async fn pricing_meta(&self) -> Result<Option<PricingMeta>> {
+        let row = sqlx::query(
+            r#"
+            SELECT source_url, last_fetch_at
+            FROM pricing_meta
+            WHERE id = 1
+            "#,
+        )
+        .fetch_optional(&*self.pool)
+        .await
+        .with_context(|| "failed to load pricing meta")?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let last_fetch_at: String = row.try_get("last_fetch_at")?;
+        let parsed = DateTime::parse_from_rfc3339(&last_fetch_at)
+            .map(|dt| dt.with_timezone(&Utc))
+            .with_context(|| "invalid last_fetch_at in pricing_meta")?;
+        Ok(Some(PricingMeta {
+            source_url: row.try_get::<String, _>("source_url")?,
+            last_fetch_at: parsed,
+        }))
+    }
+
+    pub async fn replace_prices(
+        &self,
+        prices: &[NewPrice],
+        source_url: &str,
+        fetched_at: DateTime<Utc>,
+    ) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM prices;")
+            .execute(&mut *tx)
+            .await
+            .with_context(|| "failed to clear prices table")?;
+        sqlx::query("DELETE FROM model_prices;")
+            .execute(&mut *tx)
+            .await
+            .with_context(|| "failed to clear model_prices table")?;
 
         for price in prices {
             sqlx::query(
@@ -663,20 +713,71 @@ impl Storage {
             .bind(price.completion_per_1m)
             .execute(&mut *tx)
             .await
-            .with_context(|| "failed to seed price row")?;
+            .with_context(|| "failed to insert price row")?;
         }
+
+        self.refresh_model_prices_tx(&mut tx)
+            .await
+            .with_context(|| "failed to refresh model price mappings")?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO pricing_meta (id, source_url, last_fetch_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                source_url = excluded.source_url,
+                last_fetch_at = excluded.last_fetch_at
+            "#,
+        )
+        .bind(source_url)
+        .bind(fetched_at.to_rfc3339())
+        .execute(&mut *tx)
+        .await
+        .with_context(|| "failed to upsert pricing meta")?;
 
         tx.commit().await?;
         Ok(prices.len())
     }
 
+    async fn refresh_model_prices_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO model_prices (
+                model, prompt_per_1m, cached_prompt_per_1m, completion_per_1m
+            )
+            SELECT
+                m.model,
+                p.prompt_per_1m,
+                p.cached_prompt_per_1m,
+                p.completion_per_1m
+            FROM (
+                SELECT DISTINCT model FROM session_turns
+            ) m
+            LEFT JOIN prices p
+              ON p.rowid = (
+                  SELECT p2.rowid
+                  FROM prices p2
+                  WHERE m.model LIKE p2.model || '%'
+                  ORDER BY LENGTH(p2.model) DESC
+                  LIMIT 1
+              )
+            "#,
+        )
+        .execute(&mut **tx)
+        .await
+        .with_context(|| "failed to refresh model_prices")?;
+        Ok(())
+    }
+
     pub async fn list_prices(&self) -> Result<Vec<PriceRow>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, model, effective_from, currency,
-                   prompt_per_1m, cached_prompt_per_1m, completion_per_1m
+            SELECT model, prompt_per_1m, cached_prompt_per_1m, completion_per_1m
             FROM prices
-            ORDER BY model ASC, effective_from DESC
+            ORDER BY model ASC
             "#,
         )
         .fetch_all(&*self.pool)
@@ -685,14 +786,8 @@ impl Storage {
 
         let mut prices = Vec::with_capacity(rows.len());
         for row in rows {
-            let effective_str: String = row.try_get("effective_from")?;
-            let effective_from = NaiveDate::parse_from_str(&effective_str, "%Y-%m-%d")
-                .with_context(|| format!("invalid effective_from in DB: {effective_str}"))?;
             prices.push(PriceRow {
-                id: row.try_get::<i64, _>("id")?,
                 model: row.try_get::<String, _>("model")?,
-                effective_from,
-                currency: row.try_get::<String, _>("currency")?,
                 prompt_per_1m: row.try_get::<f64, _>("prompt_per_1m").unwrap_or(0.0),
                 cached_prompt_per_1m: row.try_get::<Option<f64>, _>("cached_prompt_per_1m")?,
                 completion_per_1m: row.try_get::<f64, _>("completion_per_1m").unwrap_or(0.0),
@@ -702,90 +797,16 @@ impl Storage {
         Ok(prices)
     }
 
-    pub async fn insert_price(&self, price: &NewPrice) -> Result<i64> {
-        let result = sqlx::query(
-            r#"
-            INSERT INTO prices (
-                model, effective_from, currency, prompt_per_1m, cached_prompt_per_1m, completion_per_1m
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&price.model)
-        .bind(price.effective_from.to_string())
-        .bind(&price.currency)
-        .bind(price.prompt_per_1m)
-        .bind(price.cached_prompt_per_1m)
-        .bind(price.completion_per_1m)
-        .execute(&*self.pool)
-        .await
-        .with_context(|| "failed to insert price row")?;
-
-        Ok(result.last_insert_rowid())
-    }
-
-    pub async fn update_price(&self, id: i64, price: &NewPrice) -> Result<()> {
-        sqlx::query(
-            r#"
-            UPDATE prices
-            SET model = ?,
-                effective_from = ?,
-                currency = ?,
-                prompt_per_1m = ?,
-                cached_prompt_per_1m = ?,
-                completion_per_1m = ?
-            WHERE id = ?
-            "#,
-        )
-        .bind(&price.model)
-        .bind(price.effective_from.to_string())
-        .bind(&price.currency)
-        .bind(price.prompt_per_1m)
-        .bind(price.cached_prompt_per_1m)
-        .bind(price.completion_per_1m)
-        .bind(id)
-        .execute(&*self.pool)
-        .await
-        .with_context(|| "failed to update price row")?;
-        Ok(())
-    }
-
-    pub async fn delete_price(&self, id: i64) -> Result<()> {
-        sqlx::query("DELETE FROM prices WHERE id = ?")
-            .bind(id)
-            .execute(&*self.pool)
-            .await
-            .with_context(|| "failed to delete price row")?;
-        Ok(())
-    }
-
     pub async fn missing_price_details(&self, limit: usize) -> Result<Vec<MissingPriceDetail>> {
         let rows = sqlx::query(
             r#"
-            WITH missing AS (
-                SELECT model,
-                       DATE(MIN(timestamp), 'localtime') AS first_seen,
-                       DATE(MAX(timestamp), 'localtime') AS last_seen
-                FROM session_turn_costs
-                WHERE missing_price = 1
-                GROUP BY model
-            )
-            SELECT
-                m.model,
-                m.first_seen,
-                m.last_seen,
-                p.id AS next_price_id,
-                p.effective_from AS next_effective_from
-            FROM missing m
-            LEFT JOIN prices p
-              ON p.rowid = (
-                  SELECT p2.rowid
-                  FROM prices p2
-                  WHERE m.model LIKE p2.model || '%'
-                    AND p2.effective_from > m.first_seen
-                  ORDER BY LENGTH(p2.model) DESC, p2.effective_from ASC
-                  LIMIT 1
-              )
-            ORDER BY m.last_seen DESC
+            SELECT model,
+                   DATE(MIN(timestamp), 'localtime') AS first_seen,
+                   DATE(MAX(timestamp), 'localtime') AS last_seen
+            FROM session_turn_costs
+            WHERE missing_price = 1
+            GROUP BY model
+            ORDER BY last_seen DESC
             LIMIT ?
             "#,
         )
@@ -802,16 +823,11 @@ impl Storage {
                 .with_context(|| "invalid first_seen in missing price details")?;
             let last_seen = NaiveDate::parse_from_str(&last_seen_str, "%Y-%m-%d")
                 .with_context(|| "invalid last_seen in missing price details")?;
-            let next_effective = row
-                .try_get::<Option<String>, _>("next_effective_from")?
-                .and_then(|value| NaiveDate::parse_from_str(&value, "%Y-%m-%d").ok());
 
             results.push(MissingPriceDetail {
                 model: row.try_get::<String, _>("model")?,
                 first_seen,
                 last_seen,
-                next_price_id: row.try_get::<Option<i64>, _>("next_price_id")?,
-                next_effective_from: next_effective,
             });
         }
 
@@ -1151,36 +1167,7 @@ impl Storage {
         }))
     }
 
-    pub async fn price_by_id(&self, id: i64) -> Result<Option<PriceRow>> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, model, effective_from, currency,
-                   prompt_per_1m, cached_prompt_per_1m, completion_per_1m
-            FROM prices
-            WHERE id = ?
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(&*self.pool)
-        .await
-        .with_context(|| "failed to load price by id")?;
-
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let effective_str: String = row.try_get("effective_from")?;
-        let effective_from = NaiveDate::parse_from_str(&effective_str, "%Y-%m-%d")
-            .with_context(|| format!("invalid effective_from in DB: {effective_str}"))?;
-        Ok(Some(PriceRow {
-            id: row.try_get::<i64, _>("id")?,
-            model: row.try_get::<String, _>("model")?,
-            effective_from,
-            currency: row.try_get::<String, _>("currency")?,
-            prompt_per_1m: row.try_get::<f64, _>("prompt_per_1m").unwrap_or(0.0),
-            cached_prompt_per_1m: row.try_get::<Option<f64>, _>("cached_prompt_per_1m")?,
-            completion_per_1m: row.try_get::<f64, _>("completion_per_1m").unwrap_or(0.0),
-        }))
-    }
+    // price_by_id removed - pricing is read-only from remote source
 
     pub async fn recent_sessions_count(&self) -> Result<usize> {
         let row = sqlx::query(
@@ -1555,6 +1542,8 @@ impl Storage {
         let context_window = context_window.and_then(|value| i64::try_from(value).ok());
         let mut tx = self.pool.begin().await?;
 
+        self.ensure_model_price_tx(&mut tx, model).await?;
+
         sqlx::query(
             r#"
             INSERT INTO sessions (
@@ -1785,6 +1774,70 @@ impl Storage {
         .with_context(|| "failed to upsert session totals")?;
 
         tx.commit().await?;
+        Ok(())
+    }
+
+    async fn ensure_model_price_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        model: &str,
+    ) -> Result<()> {
+        let exists: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM model_prices WHERE model = ? LIMIT 1")
+                .bind(model)
+                .fetch_optional(&mut **tx)
+                .await
+                .with_context(|| "failed to check model_prices")?;
+        if exists.is_some() {
+            return Ok(());
+        }
+
+        let row = sqlx::query(
+            r#"
+            SELECT prompt_per_1m, cached_prompt_per_1m, completion_per_1m
+            FROM prices
+            WHERE ? LIKE model || '%'
+            ORDER BY LENGTH(model) DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(model)
+        .fetch_optional(&mut **tx)
+        .await
+        .with_context(|| "failed to resolve model price")?;
+
+        if let Some(row) = row {
+            let prompt: Option<f64> = row.try_get("prompt_per_1m").ok();
+            let cached: Option<f64> = row.try_get("cached_prompt_per_1m").ok();
+            let completion: Option<f64> = row.try_get("completion_per_1m").ok();
+            sqlx::query(
+                r#"
+                INSERT INTO model_prices (
+                    model, prompt_per_1m, cached_prompt_per_1m, completion_per_1m
+                ) VALUES (?, ?, ?, ?)
+                "#,
+            )
+            .bind(model)
+            .bind(prompt)
+            .bind(cached)
+            .bind(completion)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| "failed to insert model price")?;
+        } else {
+            sqlx::query(
+                r#"
+                INSERT INTO model_prices (
+                    model, prompt_per_1m, cached_prompt_per_1m, completion_per_1m
+                ) VALUES (?, NULL, NULL, NULL)
+                "#,
+            )
+            .bind(model)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| "failed to insert missing model price")?;
+        }
+
         Ok(())
     }
 
@@ -2026,10 +2079,7 @@ impl SessionTurn {
 
 #[derive(Debug, Clone)]
 pub struct PriceRow {
-    pub id: i64,
     pub model: String,
-    pub effective_from: NaiveDate,
-    pub currency: String,
     pub prompt_per_1m: f64,
     pub cached_prompt_per_1m: Option<f64>,
     pub completion_per_1m: f64,
@@ -2046,13 +2096,16 @@ pub struct NewPrice {
 }
 
 #[derive(Debug, Clone)]
+pub struct PricingMeta {
+    pub source_url: String,
+    pub last_fetch_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 pub struct MissingPriceDetail {
     pub model: String,
     pub first_seen: NaiveDate,
-    #[allow(dead_code)]
     pub last_seen: NaiveDate,
-    pub next_price_id: Option<i64>,
-    pub next_effective_from: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone)]
@@ -2123,7 +2176,7 @@ mod tests {
     use chrono::Duration as ChronoDuration;
     use tempfile::NamedTempFile;
 
-    async fn insert_price(
+    async fn seed_price(
         storage: &Storage,
         model: &str,
         effective_from: NaiveDate,
@@ -2131,15 +2184,16 @@ mod tests {
         cached_prompt_per_1m: Option<f64>,
         completion_per_1m: f64,
     ) {
+        let price = NewPrice {
+            model: model.to_string(),
+            effective_from,
+            currency: "USD".to_string(),
+            prompt_per_1m,
+            cached_prompt_per_1m,
+            completion_per_1m,
+        };
         storage
-            .insert_price(&NewPrice {
-                model: model.to_string(),
-                effective_from,
-                currency: "USD".to_string(),
-                prompt_per_1m,
-                cached_prompt_per_1m,
-                completion_per_1m,
-            })
+            .replace_prices(&[price], "test", Utc::now())
             .await
             .unwrap();
     }
@@ -2167,7 +2221,7 @@ mod tests {
         storage.ensure_schema().await.unwrap();
 
         let day = NaiveDate::from_ymd_opt(2025, 12, 20).unwrap();
-        insert_price(&storage, "gpt-test", day, 1.0, Some(0.5), 2.0).await;
+        seed_price(&storage, "gpt-test", day, 1.0, Some(0.5), 2.0).await;
 
         let ts = Utc.from_utc_datetime(&day.and_hms_opt(12, 0, 0).unwrap());
         storage
@@ -2201,7 +2255,7 @@ mod tests {
         storage.ensure_schema().await.unwrap();
 
         let day = NaiveDate::from_ymd_opt(2025, 12, 21).unwrap();
-        insert_price(&storage, "gpt-test", day, 1.0, None, 1.0).await;
+        seed_price(&storage, "gpt-test", day, 1.0, None, 1.0).await;
 
         let base = Utc.from_utc_datetime(&day.and_hms_opt(12, 0, 0).unwrap());
         storage

@@ -3,7 +3,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
 };
@@ -129,29 +128,40 @@ impl Default for SessionsConfig {
 pub struct PricingConfig {
     #[serde(default = "default_currency")]
     pub currency: String,
-    #[serde(default = "default_prompt_rate", alias = "default_prompt_per_1k")]
-    pub default_prompt_per_1m: f64,
-    #[serde(
-        default = "default_completion_rate",
-        alias = "default_completion_per_1k"
-    )]
-    pub default_completion_per_1m: f64,
-    #[serde(default = "default_model_pricing")]
-    pub models: HashMap<String, ModelPricing>,
+    #[serde(default)]
+    pub remote: RemotePricingConfig,
 }
 
 impl Default for PricingConfig {
     fn default() -> Self {
         Self {
             currency: default_currency(),
-            default_prompt_per_1m: default_prompt_rate(),
-            default_completion_per_1m: default_completion_rate(),
-            models: default_model_pricing(),
+            remote: RemotePricingConfig::default(),
         }
     }
 }
 
 impl PricingConfig {}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemotePricingConfig {
+    #[serde(default = "default_pricing_url")]
+    pub url: String,
+    #[serde(default = "default_pricing_refresh_interval")]
+    pub refresh_interval_hours: u64,
+    #[serde(default = "default_pricing_timeout_secs")]
+    pub timeout_secs: u64,
+}
+
+impl Default for RemotePricingConfig {
+    fn default() -> Self {
+        Self {
+            url: default_pricing_url(),
+            refresh_interval_hours: default_pricing_refresh_interval(),
+            timeout_secs: default_pricing_timeout_secs(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AlertConfig {
@@ -166,46 +176,6 @@ impl Default for AlertConfig {
         Self {
             daily_budget_usd: None,
             monthly_budget_usd: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(from = "ModelPricingInput")]
-pub struct ModelPricing {
-    pub prompt_per_1m: f64,
-    pub cached_prompt_per_1m: Option<f64>,
-    pub completion_per_1m: f64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelPricingInput {
-    prompt_per_1m: Option<f64>,
-    cached_prompt_per_1m: Option<f64>,
-    completion_per_1m: Option<f64>,
-    prompt_per_1k: Option<f64>,
-    cached_prompt_per_1k: Option<f64>,
-    completion_per_1k: Option<f64>,
-}
-
-impl From<ModelPricingInput> for ModelPricing {
-    fn from(input: ModelPricingInput) -> Self {
-        let prompt_per_1m = input
-            .prompt_per_1m
-            .or(input.prompt_per_1k.map(|value| value * 1000.0))
-            .unwrap_or(0.0);
-        let completion_per_1m = input
-            .completion_per_1m
-            .or(input.completion_per_1k.map(|value| value * 1000.0))
-            .unwrap_or(0.0);
-        let cached_prompt_per_1m = input
-            .cached_prompt_per_1m
-            .or(input.cached_prompt_per_1k.map(|value| value * 1000.0));
-
-        Self {
-            prompt_per_1m,
-            cached_prompt_per_1m,
-            completion_per_1m,
         }
     }
 }
@@ -242,103 +212,17 @@ fn default_currency() -> String {
     "USD".to_string()
 }
 
-fn default_prompt_rate() -> f64 {
-    10.0
+fn default_pricing_url() -> String {
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+        .to_string()
 }
 
-fn default_completion_rate() -> f64 {
-    30.0
+fn default_pricing_refresh_interval() -> u64 {
+    24
 }
 
-fn default_model_pricing() -> HashMap<String, ModelPricing> {
-    let mut models = HashMap::new();
-
-    models.insert(
-        "gpt-4.1".to_string(),
-        ModelPricing {
-            prompt_per_1m: 2.0,
-            cached_prompt_per_1m: Some(0.5),
-            completion_per_1m: 8.0,
-        },
-    );
-    models.insert(
-        "gpt-4.1-mini".to_string(),
-        ModelPricing {
-            prompt_per_1m: 0.4,
-            cached_prompt_per_1m: Some(0.1),
-            completion_per_1m: 1.6,
-        },
-    );
-    models.insert(
-        "gpt-4.1-nano".to_string(),
-        ModelPricing {
-            prompt_per_1m: 0.1,
-            cached_prompt_per_1m: Some(0.025),
-            completion_per_1m: 0.4,
-        },
-    );
-    models.insert(
-        "gpt-4o-2024-08-06".to_string(),
-        ModelPricing {
-            prompt_per_1m: 2.5,
-            cached_prompt_per_1m: Some(1.25),
-            completion_per_1m: 10.0,
-        },
-    );
-    models.insert(
-        "gpt-4o-mini-2024-07-18".to_string(),
-        ModelPricing {
-            prompt_per_1m: 0.15,
-            cached_prompt_per_1m: Some(0.075),
-            completion_per_1m: 0.6,
-        },
-    );
-    models.insert(
-        "o4-mini".to_string(),
-        ModelPricing {
-            prompt_per_1m: 4.0,
-            cached_prompt_per_1m: Some(1.0),
-            completion_per_1m: 16.0,
-        },
-    );
-
-    models.insert(
-        "gpt-5.1".to_string(),
-        ModelPricing {
-            prompt_per_1m: 1.25,
-            cached_prompt_per_1m: Some(0.125),
-            completion_per_1m: 10.0,
-        },
-    );
-
-    models.insert(
-        "gpt-5.1-codex".to_string(),
-        ModelPricing {
-            prompt_per_1m: 1.25,
-            cached_prompt_per_1m: Some(0.125),
-            completion_per_1m: 10.0,
-        },
-    );
-
-    models.insert(
-        "gpt-5.2".to_string(),
-        ModelPricing {
-            prompt_per_1m: 1.75,
-            cached_prompt_per_1m: Some(0.175),
-            completion_per_1m: 14.0,
-        },
-    );
-
-    models.insert(
-        "gpt-5.2-2025-12-11".to_string(),
-        ModelPricing {
-            prompt_per_1m: 1.75,
-            cached_prompt_per_1m: Some(0.175),
-            completion_per_1m: 14.0,
-        },
-    );
-
-    models
+fn default_pricing_timeout_secs() -> u64 {
+    5
 }
 
 #[cfg(test)]
@@ -364,18 +248,26 @@ mod tests {
             [display]
             recent_events_capacity = 77
 
-            [pricing.models.test]
-            prompt_per_1m = 1.0
-            completion_per_1m = 3.0
+            [pricing]
+            currency = "EUR"
+
+            [pricing.remote]
+            url = "https://example.com/pricing.json"
+            refresh_interval_hours = 12
+            timeout_secs = 9
         "#;
         fs::write(file.path(), toml).unwrap();
 
         let config = AppConfig::load(Some(file.path())).unwrap();
         assert_eq!(config.storage.database_path, PathBuf::from("custom.db"));
         assert_eq!(config.display.recent_events_capacity, 77);
-        let pricing = config.pricing.models.get("test").unwrap();
-        assert!((pricing.prompt_per_1m - 1.0).abs() < f64::EPSILON);
-        assert!((pricing.completion_per_1m - 3.0).abs() < f64::EPSILON);
+        assert_eq!(config.pricing.currency, "EUR");
+        assert_eq!(
+            config.pricing.remote.url,
+            "https://example.com/pricing.json"
+        );
+        assert_eq!(config.pricing.remote.refresh_interval_hours, 12);
+        assert_eq!(config.pricing.remote.timeout_secs, 9);
     }
 
     #[test]

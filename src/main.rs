@@ -2,6 +2,7 @@ mod app;
 mod cli;
 mod config;
 mod ingest;
+mod pricing_remote;
 mod storage;
 mod tokens;
 mod tui;
