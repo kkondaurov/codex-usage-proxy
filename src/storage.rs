@@ -1348,20 +1348,27 @@ impl Storage {
         Ok(totals)
     }
 
-    pub async fn model_usage_by_tokens(
+    pub async fn model_usage_by_cost_between(
         &self,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
         limit: usize,
-    ) -> Result<Vec<ModelTokenTotal>> {
+    ) -> Result<Vec<ModelCostTotal>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let rows = sqlx::query(
             r#"
-            SELECT model, COALESCE(SUM(total_tokens), 0) AS total_tokens
-            FROM session_turns
-            WHERE timestamp >= ? AND timestamp < ?
+            SELECT
+                model,
+                COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+            FROM session_turn_costs
+            WHERE timestamp BETWEEN ?1 AND ?2
             GROUP BY model
-            ORDER BY total_tokens DESC, model ASC
-            LIMIT ?
+            ORDER BY cost_usd DESC, total_tokens DESC
+            LIMIT ?3
             "#,
         )
         .bind(start.to_rfc3339())
@@ -1369,13 +1376,14 @@ impl Storage {
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
         .fetch_all(&*self.pool)
         .await
-        .with_context(|| "failed to load model usage totals")?;
+        .with_context(|| "failed to load model usage by cost")?;
 
         let mut totals = Vec::with_capacity(rows.len());
         for row in rows {
-            totals.push(ModelTokenTotal {
+            totals.push(ModelCostTotal {
                 model: row.try_get::<String, _>("model")?,
                 total_tokens: row.try_get::<i64, _>("total_tokens").unwrap_or(0) as u64,
+                cost_usd: row.try_get::<f64, _>("cost_usd").unwrap_or(0.0),
             });
         }
         Ok(totals)
@@ -2601,9 +2609,10 @@ pub struct DailyTokenTotal {
 }
 
 #[derive(Debug, Clone)]
-pub struct ModelTokenTotal {
+pub struct ModelCostTotal {
     pub model: String,
     pub total_tokens: u64,
+    pub cost_usd: f64,
 }
 
 #[derive(Debug, Clone)]

@@ -1110,7 +1110,7 @@ fn render_wrapped_hero(frame: &mut Frame, area: Rect, stats: &WrappedStats, them
             "Tokens".to_string(),
             format_tokens(stats.totals.total_tokens),
         ),
-        ("Cost".to_string(), format_cost(stats.totals.cost_usd)),
+        ("Cost".to_string(), format_cost_short(stats.totals.cost_usd)),
     ];
     let context_items = vec![
         ("Projects".to_string(), format_tokens(stats.total_projects)),
@@ -1329,27 +1329,59 @@ fn render_wrapped_top_models(frame: &mut Frame, area: Rect, stats: &WrappedStats
     if stats.top_models.is_empty() {
         lines.push(Line::from("No model data."));
     } else {
-        let model_width = 24usize;
-        let tokens_width = 8u16;
-        let pct_width = 6u16;
+        let total_width = area.width as usize;
+        let prefix_len = 4usize; // " 1. "
+        let sep = 2usize;
+        let tokens_width = 7usize;
+        let cost_width = 8usize;
+        let pct_width = 6usize;
+        let min_bar = 6usize;
+        let mut model_width = 24usize;
+        let fixed_tail = sep + tokens_width + sep + cost_width + sep + pct_width + sep;
+        let available = total_width.saturating_sub(prefix_len + fixed_tail);
+        let mut bar_width = 0usize;
+        if available > 0 {
+            if available > model_width + min_bar {
+                bar_width = available - model_width;
+            } else if available > min_bar {
+                model_width = available - min_bar;
+                bar_width = min_bar;
+            } else {
+                model_width = available;
+            }
+        }
         for (idx, model) in stats.top_models.iter().take(5).enumerate() {
             let pct = model.share * 100.0;
             let name = pad_right(&truncate_text(&model.model, model_width), model_width);
             let label = format!("{:>2}. {}", idx + 1, name);
-            let tokens = align_right(format_tokens(model.tokens), tokens_width);
-            let pct_label = align_right(format!("{pct:.1}%"), pct_width);
+            let tokens = align_right(format_tokens(model.tokens), tokens_width as u16);
+            let cost = align_right(format_cost_short(Some(model.cost_usd)), cost_width as u16);
+            let pct_label = align_right(format!("{pct:.1}%"), pct_width as u16);
+            let bar = if bar_width > 0 {
+                ratio_bar(model.share, bar_width)
+            } else {
+                String::new()
+            };
             let line = Line::from(vec![
                 Span::styled(label, Style::default().fg(theme.text_fg)),
                 Span::raw("  "),
                 Span::styled(tokens, Style::default().fg(theme.label_fg)),
                 Span::raw("  "),
+                Span::styled(cost, Style::default().fg(theme.label_fg)),
+                Span::raw("  "),
                 Span::styled(pct_label, Style::default().fg(theme.label_fg)),
+                if bar_width > 0 {
+                    Span::raw(" ")
+                } else {
+                    Span::raw("")
+                },
+                Span::styled(bar, Style::default().fg(theme.header_fg)),
             ]);
             lines.push(line);
         }
     }
     let paragraph = Paragraph::new(lines)
-        .block(gray_block("Top Models", theme))
+        .block(gray_block("Top Models (Spend)", theme))
         .style(Style::default().fg(theme.text_fg));
     frame.render_widget(paragraph, area);
 }
@@ -2252,12 +2284,7 @@ fn render_hero_card(
     theme: &UiTheme,
     primary: bool,
 ) {
-    let mut content = Rect {
-        x: area.x.saturating_add(1),
-        y: area.y,
-        width: area.width.saturating_sub(1),
-        height: area.height,
-    };
+    let mut content = area;
     if primary && area.width > 0 {
         let bar_area = Rect {
             x: area.x,
@@ -2270,40 +2297,63 @@ fn render_hero_card(
             .collect();
         let paragraph = Paragraph::new(lines);
         frame.render_widget(paragraph, bar_area);
-        if content.width > 0 {
-            content.x = content.x.saturating_add(1);
-            content.width = content.width.saturating_sub(1);
-        }
+        let gap = 2;
+        let consumed = 1 + gap;
+        content.x = area.x.saturating_add(consumed);
+        content.width = area.width.saturating_sub(consumed);
+    } else if content.width > 0 {
+        content.x = content.x.saturating_add(1);
+        content.width = content.width.saturating_sub(1);
     }
-    let cost = format_cost_short(metric.total.cost_usd);
-    let cost_color = if primary {
-        theme.highlight_fg
+    let cost_width = 7u16; // $NNN.NN
+    let cost = if primary {
+        format_cost_short(metric.total.cost_usd)
     } else {
-        Color::White
+        align_right(format_cost_short(metric.total.cost_usd), cost_width)
     };
-    let cost_span = Span::styled(
-        cost,
-        Style::default().fg(cost_color).add_modifier(Modifier::BOLD),
-    );
+    let cost_spans = if primary {
+        let style = Style::default()
+            .fg(Color::Black)
+            .bg(theme.header_fg)
+            .add_modifier(Modifier::BOLD);
+        vec![
+            Span::styled(" ", style),
+            Span::styled(cost, style),
+            Span::styled(" ", style),
+        ]
+    } else {
+        vec![Span::styled(
+            cost,
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )]
+    };
+    let delta_width = cost_width + 1;
     let delta_span = match metric.delta {
         Some(delta) => {
             let (symbol, color) = if delta >= 0.0 {
-                ("▲", Color::Green)
+                ("▲", Color::Red)
             } else {
-                ("▼", Color::Red)
+                ("▼", Color::Green)
             };
-            Span::styled(
-                format!("{symbol} ${:.2}", delta.abs()),
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            )
+            let value = format!("${:.2}", delta.abs());
+            let text = align_right(format!("{symbol} {value}"), delta_width);
+            Span::styled(text, Style::default().fg(color).add_modifier(Modifier::BOLD))
         }
-        None => Span::styled("—", Style::default().fg(theme.label_fg)),
+        None => {
+            let text = align_right("—".to_string(), delta_width);
+            Span::styled(text, Style::default().fg(theme.label_fg))
+        }
     };
 
-    let mut metric_spans = vec![Span::raw(" "), cost_span, Span::raw("  "), delta_span];
-    let session_label = format_count_short(metric.session_count);
-    let message_label = format_count_short(metric.message_count);
+    let mut metric_spans = Vec::new();
+    metric_spans.extend(cost_spans);
     metric_spans.push(Span::raw("  "));
+    metric_spans.push(delta_span);
+    let session_label = align_right(format_count_short(metric.session_count), 3);
+    let message_label = align_right(format_message_count_compact(metric.message_count), 4);
+    metric_spans.push(Span::raw(" • "));
     let meta_color = if primary {
         theme.highlight_fg
     } else {
@@ -2313,11 +2363,21 @@ fn render_hero_card(
         .fg(theme.label_fg)
         .add_modifier(Modifier::DIM);
     let value_style = Style::default().fg(meta_color);
-    metric_spans.push(Span::styled("Sessions ", label_style));
     metric_spans.push(Span::styled(session_label, value_style));
+    let session_suffix = if metric.session_count == 1 {
+        " session"
+    } else {
+        " sessions"
+    };
+    metric_spans.push(Span::styled(session_suffix, label_style));
     metric_spans.push(Span::raw(" • "));
-    metric_spans.push(Span::styled("Messages ", label_style));
     metric_spans.push(Span::styled(message_label, value_style));
+    let message_suffix = if metric.message_count == 1 {
+        " message"
+    } else {
+        " messages"
+    };
+    metric_spans.push(Span::styled(message_suffix, label_style));
     if let (Some(budget), Some(cost)) = (metric.budget, metric.total.cost_usd)
         && let Some(bar_spans) = budget_bar_with_percent(cost, budget, 10)
     {
@@ -2334,7 +2394,12 @@ fn render_hero_card(
             .fg(theme.header_fg)
             .add_modifier(Modifier::BOLD)
     };
-    let mut lines = vec![Line::from(Span::styled(format!(" {title} "), title_style))];
+    let title_text = if primary {
+        format!("{title} ")
+    } else {
+        format!(" {title} ")
+    };
+    let mut lines = vec![Line::from(Span::styled(title_text, title_style))];
     if content.height > 2 {
         lines.push(Line::from(""));
     }
@@ -2342,7 +2407,7 @@ fn render_hero_card(
 
     let paragraph = Paragraph::new(lines)
         .style(Style::default().fg(theme.text_fg))
-        .wrap(Wrap { trim: true });
+        .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, content);
 }
 
@@ -3149,6 +3214,16 @@ fn format_count_short(value: u64) -> String {
     }
 }
 
+fn format_message_count_compact(value: u64) -> String {
+    if value >= 10_000 {
+        "10K+".to_string()
+    } else if value >= 1_000 {
+        "1K+".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 fn format_cost(cost: Option<f64>) -> String {
     match cost {
         Some(value) => format!("${:.4}", value),
@@ -3936,6 +4011,7 @@ impl StatsRangeData {
 struct WrappedModelStat {
     model: String,
     tokens: u64,
+    cost_usd: f64,
     share: f64,
 }
 
@@ -3964,7 +4040,7 @@ impl WrappedStats {
         let counts = storage.counts_between_timestamps(start, end).await?;
         let daily_rows = storage.token_totals_by_day(start, end).await?;
         let project_count = storage.project_count_between(start, end).await?;
-        let model_totals = storage.model_usage_by_tokens(start, end, 5).await?;
+        let model_totals = storage.model_usage_by_cost_between(start, end, 5).await?;
         let first_session = storage
             .first_session_timestamp()
             .await?
@@ -4001,20 +4077,21 @@ impl WrappedStats {
         let (max_streak, current_streak, max_streak_days) =
             streak_stats_for_year(&daily_tokens, end_date);
 
-        let total_tokens = totals.total_tokens;
-        let model_total_tokens: u64 = model_totals.iter().map(|row| row.total_tokens).sum();
-        let denominator = if total_tokens > 0 {
-            total_tokens
+        let total_cost = totals.cost_usd.unwrap_or(0.0);
+        let model_total_cost: f64 = model_totals.iter().map(|row| row.cost_usd).sum();
+        let denominator = if total_cost > 0.0 {
+            total_cost
         } else {
-            model_total_tokens
+            model_total_cost
         };
         let top_models = model_totals
             .into_iter()
             .map(|row| WrappedModelStat {
                 model: row.model,
                 tokens: row.total_tokens,
-                share: if denominator > 0 {
-                    row.total_tokens as f64 / denominator as f64
+                cost_usd: row.cost_usd,
+                share: if denominator > 0.0 {
+                    row.cost_usd / denominator
                 } else {
                     0.0
                 },
