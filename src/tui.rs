@@ -995,7 +995,7 @@ fn draw_overview(
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(10),
-                    Constraint::Length(11),
+                    Constraint::Length(12),
                     Constraint::Length(9),
                     Constraint::Min(0),
                 ])
@@ -1177,7 +1177,8 @@ fn render_wrapped_heatmap(frame: &mut Frame, area: Rect, stats: &WrappedStats, t
     }
 
     let weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    let mut lines = Vec::with_capacity(8);
+    let mut lines = Vec::with_capacity(9);
+    lines.push(heatmap_month_line(&weeks, theme));
     for (row_idx, label) in weekday_labels.iter().enumerate() {
         let mut spans = vec![Span::styled(
             format!("{label} "),
@@ -1214,6 +1215,53 @@ fn render_wrapped_heatmap(frame: &mut Frame, area: Rect, stats: &WrappedStats, t
         .block(gray_block("Token Activity (Mon–Sun)", theme))
         .style(Style::default().fg(theme.text_fg));
     frame.render_widget(paragraph, area);
+}
+
+fn heatmap_month_line(weeks: &[[Option<NaiveDate>; 7]], theme: &UiTheme) -> Line<'static> {
+    if weeks.is_empty() {
+        return Line::from("");
+    }
+    let width = weeks.len() * 2 + weeks.len().saturating_sub(1);
+    let mut chars = vec![' '; width];
+    for (week_idx, week) in weeks.iter().enumerate() {
+        let month = week
+            .iter()
+            .flatten()
+            .find(|date| date.day() == 1)
+            .map(|date| date.month());
+        if let Some(month) = month {
+            let label = month_abbrev(month);
+            let start = week_idx * 3;
+            for (offset, ch) in label.chars().enumerate() {
+                if start + offset < chars.len() {
+                    chars[start + offset] = ch;
+                }
+            }
+        }
+    }
+    let month_line: String = chars.into_iter().collect();
+    Line::from(vec![
+        Span::styled("    ", Style::default().fg(theme.label_fg)),
+        Span::styled(month_line, Style::default().fg(theme.label_fg)),
+    ])
+}
+
+fn month_abbrev(month: u32) -> &'static str {
+    match month {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => "",
+    }
 }
 
 fn heatmap_legend_line(theme: &UiTheme, width: u16) -> Line<'static> {
