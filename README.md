@@ -6,14 +6,12 @@ When using `codex-cli` with an OpenAI API key, there's no access to usage/spend 
 
 Under the hood, it tails session files as they are updated and aggregates token usage + costs in SQLite for a live terminal UI.
 
-:warning: **HIGHLY EXPERIMENTAL! NO GUARANTEES OF ACCURACY OR STABILITY! USE AT YOUR OWN RISK!**
-
 ## Screenshots
 <details>
 
 <summary>Overview</summary>
 
-![overview](/screenshots/1-overview-v4.png)
+![overview](/screenshots/1-overview-v5.png)
 
 </details>
 

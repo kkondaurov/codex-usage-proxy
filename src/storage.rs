@@ -1389,6 +1389,49 @@ impl Storage {
         Ok(totals)
     }
 
+    pub async fn repo_usage_by_cost_between(
+        &self,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<RepoCostTotal>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                COALESCE(NULLIF(s.repo_url, ''), NULLIF(s.cwd, '')) AS repo,
+                COALESCE(SUM(t.total_tokens), 0) AS total_tokens,
+                COALESCE(SUM(t.cost_usd), 0.0) AS cost_usd
+            FROM session_turn_costs t
+            JOIN sessions s ON s.session_id = t.session_id
+            WHERE t.timestamp BETWEEN ?1 AND ?2
+              AND COALESCE(NULLIF(s.repo_url, ''), NULLIF(s.cwd, '')) IS NOT NULL
+            GROUP BY repo
+            ORDER BY cost_usd DESC, total_tokens DESC
+            LIMIT ?3
+            "#,
+        )
+        .bind(start.to_rfc3339())
+        .bind(end.to_rfc3339())
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&*self.pool)
+        .await
+        .with_context(|| "failed to load repo usage by cost")?;
+
+        let mut totals = Vec::with_capacity(rows.len());
+        for row in rows {
+            totals.push(RepoCostTotal {
+                repo: row.try_get::<String, _>("repo")?,
+                total_tokens: row.try_get::<i64, _>("total_tokens").unwrap_or(0) as u64,
+                cost_usd: row.try_get::<f64, _>("cost_usd").unwrap_or(0.0),
+            });
+        }
+        Ok(totals)
+    }
+
     pub async fn project_count_between(
         &self,
         start: DateTime<Utc>,
@@ -2611,6 +2654,13 @@ pub struct DailyTokenTotal {
 #[derive(Debug, Clone)]
 pub struct ModelCostTotal {
     pub model: String,
+    pub total_tokens: u64,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepoCostTotal {
+    pub repo: String,
     pub total_tokens: u64,
     pub cost_usd: f64,
 }

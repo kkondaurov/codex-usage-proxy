@@ -45,6 +45,7 @@ const MODAL_COST_COL_WIDTH: u16 = 10;
 const MODAL_TOKEN_COL_WIDTH: u16 = 7;
 const MODAL_REASON_COL_WIDTH: u16 = 9;
 const MODAL_CONTEXT_COL_WIDTH: u16 = 11;
+const HEATMAP_LEFT_MARGIN: &str = "  ";
 
 const HEATMAP_COLORS: [Color; 7] = [
     Color::Rgb(35, 35, 35),
@@ -67,12 +68,12 @@ const MODEL_BAR_COLORS: [Color; 7] = [
 const FUTURE_HEATMAP_COLOR: Color = Color::Rgb(22, 22, 22);
 const STREAK_COLORS: [Color; 7] = [
     Color::Rgb(35, 35, 35),
-    Color::Rgb(60, 90, 140),
-    Color::Rgb(75, 115, 175),
-    Color::Rgb(95, 140, 210),
-    Color::Rgb(115, 165, 230),
-    Color::Rgb(135, 190, 245),
-    Color::Rgb(155, 215, 255),
+    Color::Rgb(90, 60, 20),
+    Color::Rgb(120, 80, 30),
+    Color::Rgb(150, 100, 35),
+    Color::Rgb(180, 120, 45),
+    Color::Rgb(210, 140, 55),
+    Color::Rgb(235, 165, 70),
 ];
 const SUMMARY_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const RECENT_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
@@ -992,33 +993,51 @@ fn draw_overview(
 ) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(0)])
+        .constraints([Constraint::Length(6), Constraint::Length(1), Constraint::Min(0)])
         .split(area);
 
     render_hero_cards(frame, layout[0], stats, dim);
+    frame.render_widget(Paragraph::new(Line::from("")), layout[1]);
 
     let theme = ui_theme(dim);
-    let wrapped_area = layout[1];
+    let wrapped_area = layout[2];
+    let nav_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .split(wrapped_area);
+    let year_line = Paragraph::new(year_control_line(wrapped_view.year, &theme));
+    frame.render_widget(year_line, nav_layout[0]);
+    frame.render_widget(Paragraph::new(Line::from("")), nav_layout[1]);
+    render_horizontal_separator(frame, nav_layout[2], Color::DarkGray);
+    let content_area = nav_layout[3];
     match wrapped_data {
         Some(stats) if stats.has_activity() => {
             let wrapped_layout = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(10),
+                    Constraint::Length(6),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
                     Constraint::Length(12),
-                    Constraint::Length(9),
+                    Constraint::Length(7),
                     Constraint::Min(0),
                 ])
-                .split(wrapped_area);
+                .split(content_area);
             render_wrapped_hero(frame, wrapped_layout[0], stats, &theme);
-            render_wrapped_heatmap(frame, wrapped_layout[1], stats, &theme);
-            render_wrapped_bottom(frame, wrapped_layout[2], stats, &theme);
+            render_horizontal_separator(frame, wrapped_layout[1], Color::DarkGray);
+            frame.render_widget(Paragraph::new(Line::from("")), wrapped_layout[2]);
+            render_wrapped_heatmap(frame, wrapped_layout[3], stats, &theme);
+            render_wrapped_bottom(frame, wrapped_layout[4], stats, &theme);
         }
         Some(_) => {
             render_overview_placeholder(
                 frame,
-                wrapped_area,
-                wrapped_view.year,
+                content_area,
                 format!("No Codex activity found for {}.", wrapped_view.year),
                 &theme,
             );
@@ -1026,8 +1045,7 @@ fn draw_overview(
         None => {
             render_overview_placeholder(
                 frame,
-                wrapped_area,
-                wrapped_view.year,
+                content_area,
                 "Loading annual stats…".to_string(),
                 &theme,
             );
@@ -1088,49 +1106,40 @@ fn render_wrapped_hero(frame: &mut Frame, area: Rect, stats: &WrappedStats, them
         stats.days_since_first_session
     );
 
-    let block = gray_block("Overview", theme);
+    let block = Block::default().borders(Borders::NONE);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let inner = Rect {
+        x: inner.x.saturating_add(1),
+        y: inner.y,
+        width: inner.width.saturating_sub(1),
+        height: inner.height,
+    };
 
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(inner);
-    let year_line = Paragraph::new(year_control_line(stats.year, theme));
-    frame.render_widget(year_line, layout[0]);
-    let spacer = Paragraph::new(Line::from(""));
-    frame.render_widget(spacer, layout[1]);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Percentage(48),
-            Constraint::Length(2),
+            Constraint::Length(5),
             Constraint::Percentage(48),
         ])
-        .split(layout[2]);
+        .split(inner);
 
     let usage_items = vec![
-        ("Sessions".to_string(), format_tokens(stats.total_sessions)),
-        ("Messages".to_string(), format_tokens(stats.total_messages)),
-        (
-            "Tokens".to_string(),
-            format_tokens(stats.totals.total_tokens),
-        ),
         ("Cost".to_string(), format_cost_short(stats.totals.cost_usd)),
+        ("Tokens".to_string(), format_tokens(stats.totals.total_tokens)),
+        ("Messages".to_string(), format_tokens(stats.total_messages)),
+        ("Sessions".to_string(), format_tokens(stats.total_sessions)),
     ];
     let context_items = vec![
-        ("Projects".to_string(), format_tokens(stats.total_projects)),
-        ("Streak".to_string(), streak_value),
-        ("Most Active".to_string(), most_active),
         ("Started".to_string(), started_value),
+        ("Most Active".to_string(), most_active),
+        ("Streak".to_string(), streak_value),
+        ("Projects".to_string(), format_tokens(stats.total_projects)),
     ];
 
-    let usage_lines = overview_cluster_lines("Usage", &usage_items, theme);
-    let context_lines = overview_cluster_lines("Context", &context_items, theme);
+    let usage_lines = overview_cluster_lines(&usage_items, theme);
+    let context_lines = overview_cluster_lines(&context_items, theme);
 
     let usage = Paragraph::new(usage_lines).style(Style::default().fg(theme.text_fg));
     let context = Paragraph::new(context_lines).style(Style::default().fg(theme.text_fg));
@@ -1138,21 +1147,9 @@ fn render_wrapped_hero(frame: &mut Frame, area: Rect, stats: &WrappedStats, them
     frame.render_widget(context, columns[2]);
 }
 
-fn overview_cluster_lines(
-    title: &str,
-    items: &[(String, String)],
-    theme: &UiTheme,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::with_capacity(items.len().saturating_add(2));
-    let header_style = Style::default()
-        .fg(theme.header_fg)
-        .add_modifier(Modifier::BOLD);
-    lines.push(Line::from(vec![
-        Span::raw(" "),
-        Span::styled(title.to_string(), header_style),
-    ]));
+fn overview_cluster_lines(items: &[(String, String)], theme: &UiTheme) -> Vec<Line<'static>> {
+    let mut lines = Vec::with_capacity(items.len().saturating_add(1));
     lines.push(Line::from(""));
-
     let label_width = items
         .iter()
         .map(|(label, _)| label.chars().count())
@@ -1178,9 +1175,17 @@ fn overview_cluster_lines(
 fn render_wrapped_heatmap(frame: &mut Frame, area: Rect, stats: &WrappedStats, theme: &UiTheme) {
     let weeks = heatmap_weeks_for_year(stats.year);
     let max_tokens = stats.daily_tokens.values().copied().max().unwrap_or(0);
+    let weekday_total: u64 = stats.weekday_tokens.iter().copied().sum();
     if weeks.is_empty() {
-        let paragraph = Paragraph::new("No activity yet.")
-            .block(gray_block("Token Activity", theme))
+        let paragraph = Paragraph::new(format!("{HEATMAP_LEFT_MARGIN}No activity yet."))
+            .block(
+                Block::default()
+                    .title(Span::styled(
+                        format!("{HEATMAP_LEFT_MARGIN}Token Activity"),
+                        Style::default().fg(Color::DarkGray),
+                    ))
+                    .borders(Borders::NONE),
+            )
             .style(Style::default().fg(theme.text_fg));
         frame.render_widget(paragraph, area);
         return;
@@ -1188,15 +1193,20 @@ fn render_wrapped_heatmap(frame: &mut Frame, area: Rect, stats: &WrappedStats, t
 
     let weekday_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     let mut lines = Vec::with_capacity(9);
-    lines.push(heatmap_month_line(&weeks, theme, stats.year));
+    lines.push(heatmap_month_line(
+        &weeks,
+        theme,
+        stats.year,
+        HEATMAP_LEFT_MARGIN,
+    ));
     let start_date = NaiveDate::from_ymd_opt(stats.year, 1, 1).unwrap_or(stats.end_date);
     let last_day = NaiveDate::from_ymd_opt(stats.year, 12, 31).unwrap_or(stats.end_date);
     let is_current_year = stats.end_date < last_day;
     for (row_idx, label) in weekday_labels.iter().enumerate() {
-        let mut spans = vec![Span::styled(
-            format!("{label} "),
-            Style::default().fg(theme.label_fg),
-        )];
+        let mut spans = vec![
+            Span::raw(HEATMAP_LEFT_MARGIN),
+            Span::styled(format!("{label} "), Style::default().fg(theme.label_fg)),
+        ];
         for (week_idx, week) in weeks.iter().enumerate() {
             if week_idx > 0 {
                 spans.push(Span::raw(" "));
@@ -1224,20 +1234,59 @@ fn render_wrapped_heatmap(frame: &mut Frame, area: Rect, stats: &WrappedStats, t
             };
             spans.push(Span::styled("  ".to_string(), Style::default().bg(color)));
         }
+        let weekday_count = stats.weekday_tokens[row_idx];
+        let weekday_ratio = if weekday_total > 0 {
+            weekday_count as f64 / weekday_total as f64
+        } else {
+            0.0
+        };
+        let weekday_intensity =
+            heatmap_intensity((weekday_ratio * 1000.0).round() as u64, 1000);
+        let weekday_color = MODEL_BAR_COLORS[weekday_intensity];
+        let pct_label = pad_right(&format!("{:.0}%", weekday_ratio * 100.0), 4);
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            "  ".to_string(),
+            Style::default().bg(weekday_color),
+        ));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            pct_label,
+            Style::default()
+                .fg(theme.label_fg)
+                .add_modifier(Modifier::DIM),
+        ));
         lines.push(Line::from(spans));
     }
 
-    let content_width = area.width.saturating_sub(2);
+    let margin_width = HEATMAP_LEFT_MARGIN.chars().count() as u16;
+    let content_width = area.width.saturating_sub(margin_width);
     lines.push(Line::from(""));
-    lines.push(heatmap_legend_line(theme, content_width));
+    lines.push(heatmap_legend_line(
+        theme,
+        content_width,
+        HEATMAP_LEFT_MARGIN,
+    ));
 
     let paragraph = Paragraph::new(lines)
-        .block(gray_block("Token Activity (Mon–Sun)", theme))
+        .block(
+            Block::default()
+                .title(Span::styled(
+                    format!("{HEATMAP_LEFT_MARGIN}Token Activity (Mon–Sun)"),
+                    Style::default().fg(Color::DarkGray),
+                ))
+                .borders(Borders::NONE),
+        )
         .style(Style::default().fg(theme.text_fg));
     frame.render_widget(paragraph, area);
 }
 
-fn heatmap_month_line(weeks: &[[Option<NaiveDate>; 7]], theme: &UiTheme, year: i32) -> Line<'static> {
+fn heatmap_month_line(
+    weeks: &[[Option<NaiveDate>; 7]],
+    theme: &UiTheme,
+    year: i32,
+    margin: &'static str,
+) -> Line<'static> {
     if weeks.is_empty() {
         return Line::from("");
     }
@@ -1261,6 +1310,7 @@ fn heatmap_month_line(weeks: &[[Option<NaiveDate>; 7]], theme: &UiTheme, year: i
     }
     let month_line: String = chars.into_iter().collect();
     Line::from(vec![
+        Span::raw(margin),
         Span::styled("    ", Style::default().fg(theme.label_fg)),
         Span::styled(month_line, Style::default().fg(theme.label_fg)),
     ])
@@ -1284,8 +1334,11 @@ fn month_abbrev(month: u32) -> &'static str {
     }
 }
 
-fn heatmap_legend_line(theme: &UiTheme, width: u16) -> Line<'static> {
-    let mut spans = vec![Span::styled("Less ", Style::default().fg(theme.label_fg))];
+fn heatmap_legend_line(theme: &UiTheme, width: u16, margin: &'static str) -> Line<'static> {
+    let mut spans = vec![
+        Span::raw(margin),
+        Span::styled("Less ", Style::default().fg(theme.label_fg)),
+    ];
     let mut left_len = "Less ".chars().count();
     for (idx, color) in HEATMAP_COLORS.iter().enumerate() {
         if idx > 0 {
@@ -1340,8 +1393,8 @@ fn render_wrapped_bottom(frame: &mut Frame, area: Rect, stats: &WrappedStats, th
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
-    render_wrapped_top_models(frame, layout[0], stats, theme);
-    render_wrapped_weekday(frame, layout[1], stats, theme);
+    render_wrapped_top_repos(frame, layout[0], stats, theme);
+    render_wrapped_top_models(frame, layout[1], stats, theme);
 }
 
 fn render_wrapped_top_models(frame: &mut Frame, area: Rect, stats: &WrappedStats, theme: &UiTheme) {
@@ -1408,55 +1461,67 @@ fn render_wrapped_top_models(frame: &mut Frame, area: Rect, stats: &WrappedStats
     frame.render_widget(paragraph, area);
 }
 
-fn render_wrapped_weekday(frame: &mut Frame, area: Rect, stats: &WrappedStats, theme: &UiTheme) {
-    let labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    let max = stats.weekday_tokens.iter().copied().max().unwrap_or(0);
-    let label_width = 4u16;
-    let content_width = area.width.saturating_sub(2);
-    let preferred_value_width = 14u16;
-    let min_value_width = 8u16;
-    let max_value_width = content_width.saturating_sub(label_width + 1);
-    let value_width = if max_value_width == 0 {
-        0
-    } else {
-        preferred_value_width
-            .min(max_value_width)
-            .max(min_value_width.min(max_value_width))
-    };
-    let right_padding = if value_width > 0 { 1 } else { 0 };
-    let bar_width = content_width
-        .saturating_sub(label_width)
-        .saturating_sub(value_width)
-        .saturating_sub(1)
-        .saturating_sub(right_padding) as usize;
-    let bar_width = bar_width.max(1);
+fn render_wrapped_top_repos(frame: &mut Frame, area: Rect, stats: &WrappedStats, theme: &UiTheme) {
     let mut lines = Vec::new();
-    for (idx, label) in labels.iter().enumerate() {
-        let count = stats.weekday_tokens[idx];
-        let ratio = if max > 0 {
-            count as f64 / max as f64
-        } else {
-            0.0
-        };
-        let bar = ratio_bar(ratio, bar_width);
-        let intensity = heatmap_intensity(count, max);
-        let bar_color = HEATMAP_COLORS[intensity];
-        let value_label = if value_width == 0 {
-            String::new()
-        } else {
-            align_right(format_tokens(count), value_width)
-        };
-        let line = Line::from(vec![
-            Span::styled(format!("{label} "), Style::default().fg(theme.label_fg)),
-            Span::styled(bar, Style::default().fg(bar_color)),
-            Span::raw(" "),
-            Span::styled(value_label, Style::default().fg(theme.label_fg)),
-            Span::raw(if right_padding > 0 { " " } else { "" }),
-        ]);
-        lines.push(line);
+    if stats.top_repos.is_empty() {
+        lines.push(Line::from("No repo data."));
+    } else {
+        let total_width = area.width as usize;
+        let prefix_len = 4usize; // " 1. "
+        let sep = 2usize;
+        let tokens_width = 7usize;
+        let cost_width = 8usize;
+        let pct_width = 6usize;
+        let min_bar = 6usize;
+        let mut repo_width = 24usize;
+        let fixed_tail = sep + tokens_width + sep + cost_width + sep + pct_width + sep;
+        let available = total_width.saturating_sub(prefix_len + fixed_tail);
+        let mut bar_width = 0usize;
+        if available > 0 {
+            if available > repo_width + min_bar {
+                bar_width = available - repo_width;
+            } else if available > min_bar {
+                repo_width = available - min_bar;
+                bar_width = min_bar;
+            } else {
+                repo_width = available;
+            }
+        }
+        for (idx, repo) in stats.top_repos.iter().take(5).enumerate() {
+            let pct = repo.share * 100.0;
+            let repo_label = format_repo_label(Some(&repo.repo));
+            let name = pad_right(&truncate_text(&repo_label, repo_width), repo_width);
+            let label = format!("{:>2}. {}", idx + 1, name);
+            let tokens = align_right(format_tokens(repo.tokens), tokens_width as u16);
+            let cost = align_right(format_cost_short(Some(repo.cost_usd)), cost_width as u16);
+            let pct_label = align_right(format!("{pct:.1}%"), pct_width as u16);
+            let bar = if bar_width > 0 {
+                ratio_bar(repo.share, bar_width)
+            } else {
+                String::new()
+            };
+            let intensity = heatmap_intensity((repo.share * 1000.0).round() as u64, 1000);
+            let bar_color = MODEL_BAR_COLORS[intensity];
+            let line = Line::from(vec![
+                Span::styled(label, Style::default().fg(theme.text_fg)),
+                Span::raw("  "),
+                Span::styled(tokens, Style::default().fg(theme.label_fg)),
+                Span::raw("  "),
+                Span::styled(cost, Style::default().fg(theme.label_fg)),
+                Span::raw("  "),
+                Span::styled(pct_label, Style::default().fg(theme.label_fg)),
+                if bar_width > 0 {
+                    Span::raw(" ")
+                } else {
+                    Span::raw("")
+                },
+                Span::styled(bar, Style::default().fg(bar_color)),
+            ]);
+            lines.push(line);
+        }
     }
     let paragraph = Paragraph::new(lines)
-        .block(gray_block("Weekday Tokens (Mon–Sun)", theme))
+        .block(gray_block("Top Repos (Spend)", theme))
         .style(Style::default().fg(theme.text_fg));
     frame.render_widget(paragraph, area);
 }
@@ -2487,6 +2552,15 @@ fn render_vertical_divider(frame: &mut Frame, area: Rect, theme: &UiTheme) {
     frame.render_widget(paragraph, area);
 }
 
+fn render_horizontal_separator(frame: &mut Frame, area: Rect, color: Color) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let line = "─".repeat(area.width as usize);
+    let paragraph = Paragraph::new(line).style(Style::default().fg(color));
+    frame.render_widget(paragraph, area);
+}
+
 fn render_sessions_table(
     frame: &mut Frame,
     area: Rect,
@@ -2539,7 +2613,6 @@ fn year_control_line(year: i32, theme: &UiTheme) -> Line<'static> {
 fn render_overview_placeholder(
     frame: &mut Frame,
     area: Rect,
-    year: i32,
     message: String,
     theme: &UiTheme,
 ) {
@@ -2547,21 +2620,8 @@ fn render_overview_placeholder(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(inner);
-    let year_line = Paragraph::new(year_control_line(year, theme));
-    frame.render_widget(year_line, layout[0]);
-    let spacer = Paragraph::new(Line::from(""));
-    frame.render_widget(spacer, layout[1]);
-
     let paragraph = Paragraph::new(message).style(Style::default().fg(theme.text_fg));
-    frame.render_widget(paragraph, layout[2]);
+    frame.render_widget(paragraph, inner);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4037,6 +4097,13 @@ struct WrappedModelStat {
     share: f64,
 }
 
+struct WrappedRepoStat {
+    repo: String,
+    tokens: u64,
+    cost_usd: f64,
+    share: f64,
+}
+
 struct WrappedStats {
     year: i32,
     end_date: NaiveDate,
@@ -4047,6 +4114,7 @@ struct WrappedStats {
     total_projects: u64,
     totals: AggregateTotals,
     top_models: Vec<WrappedModelStat>,
+    top_repos: Vec<WrappedRepoStat>,
     daily_tokens: HashMap<NaiveDate, u64>,
     most_active_day: Option<(NaiveDate, u64)>,
     weekday_tokens: [u64; 7],
@@ -4063,6 +4131,7 @@ impl WrappedStats {
         let daily_rows = storage.token_totals_by_day(start, end).await?;
         let project_count = storage.project_count_between(start, end).await?;
         let model_totals = storage.model_usage_by_cost_between(start, end, 5).await?;
+        let repo_totals = storage.repo_usage_by_cost_between(start, end, 5).await?;
         let first_session = storage
             .first_session_timestamp()
             .await?
@@ -4101,10 +4170,16 @@ impl WrappedStats {
 
         let total_cost = totals.cost_usd.unwrap_or(0.0);
         let model_total_cost: f64 = model_totals.iter().map(|row| row.cost_usd).sum();
-        let denominator = if total_cost > 0.0 {
+        let repo_total_cost: f64 = repo_totals.iter().map(|row| row.cost_usd).sum();
+        let model_denominator = if total_cost > 0.0 {
             total_cost
         } else {
             model_total_cost
+        };
+        let repo_denominator = if total_cost > 0.0 {
+            total_cost
+        } else {
+            repo_total_cost
         };
         let top_models = model_totals
             .into_iter()
@@ -4112,8 +4187,21 @@ impl WrappedStats {
                 model: row.model,
                 tokens: row.total_tokens,
                 cost_usd: row.cost_usd,
-                share: if denominator > 0.0 {
-                    row.cost_usd / denominator
+                share: if model_denominator > 0.0 {
+                    row.cost_usd / model_denominator
+                } else {
+                    0.0
+                },
+            })
+            .collect();
+        let top_repos = repo_totals
+            .into_iter()
+            .map(|row| WrappedRepoStat {
+                repo: row.repo,
+                tokens: row.total_tokens,
+                cost_usd: row.cost_usd,
+                share: if repo_denominator > 0.0 {
+                    row.cost_usd / repo_denominator
                 } else {
                     0.0
                 },
@@ -4130,6 +4218,7 @@ impl WrappedStats {
             total_projects: project_count,
             totals,
             top_models,
+            top_repos,
             daily_tokens,
             most_active_day,
             weekday_tokens,
