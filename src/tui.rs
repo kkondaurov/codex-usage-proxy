@@ -2163,7 +2163,7 @@ fn render_navbar(frame: &mut Frame, area: Rect, view_mode: ViewMode, dim: bool) 
     }
     let line = Line::from(spans);
     let block = Block::default()
-        .title(" Codex Usage Tracker ")
+        .title(" Codex Dashboard ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_fg));
     let paragraph = Paragraph::new(line)

@@ -1,8 +1,8 @@
-# Codex Usage Tracker Architecture
+# Codex Dashboard Architecture
 
 ## Overview
 
-`codex-usage-tracker` is a single Rust binary that runs two major subsystems on the same Tokio runtime:
+`codex-dashboard` is a single Rust binary that runs two major subsystems on the same Tokio runtime:
 
 1. **Session Ingestor** – Watches the Codex session logs under `~/.codex/sessions/**/**/*.jsonl`, tails new lines, and extracts token usage deltas from `token_count` events.
 2. **Terminal UI (TUI)** – Renders live usage stats in the terminal: rolling daily/weekly/monthly totals plus a table of the most recent sessions.

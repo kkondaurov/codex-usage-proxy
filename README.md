@@ -1,8 +1,8 @@
-# Codex Usage Tracker
+# Codex Dashboard
 
 When using `codex-cli` with an OpenAI API key, there's no access to usage/spend data.
 
-`codex-usage-tracker` monitors Codex usage in real time by reading the JSONL session logs that Codex writes under `~/.codex/sessions`.
+`codex-dashboard` monitors Codex usage in real time by reading the JSONL session logs that Codex writes under `~/.codex/sessions`.
 
 Under the hood, it tails session files as they are updated and aggregates token usage + costs in SQLite for a live terminal UI.
 

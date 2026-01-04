@@ -1,9 +1,9 @@
 use clap::Parser;
 use std::path::PathBuf;
 
-/// Command-line interface for configuring the usage tracker.
+/// Command-line interface for configuring the dashboard.
 #[derive(Debug, Parser)]
-#[command(author, version, about = "Local Codex usage tracker and TUI", long_about = None)]
+#[command(author, version, about = "Local Codex dashboard and TUI", long_about = None)]
 pub struct Cli {
     /// Path to a TOML configuration file (defaults to ./codex-usage.toml if present).
     #[arg(long, value_name = "FILE")]

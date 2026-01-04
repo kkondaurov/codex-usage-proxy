@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This document defines the local configuration format for `codex-usage-tracker`, including where the config lives, how each key behaves, and how pricing sync works.
+This document defines the local configuration format for `codex-dashboard`, including where the config lives, how each key behaves, and how pricing sync works.
 
 ## File Locations
 
